@@ -43,7 +43,6 @@ class NfsConnection:
             if lookup_res["status"] == NFS3_OK:
                 fh = lookup_res["resok"]["object"]["data"]
                 attrs = lookup_res["resok"]["obj_attributes"]["attributes"]
-                print(lookup_res)
             else:
                 raise IOError("NFS lookup failed")
 
@@ -89,13 +88,25 @@ class NfsConnection:
                 yield entry[0]['name']
                 entry = entry[0]['nextentry']
 
-    def read(self, path: str, chunk_size: int = 1024 * 50, progress_bar=False):
+    def _read(self, path: str, chunk_size: int = 1024 * 50, progress_bar=False):
         path = self._splitpath(path)
         fh, attrs = self._open(path)
         if attrs["type"] != 1:
             raise IOError("Tried to read a non-file")
 
-        print(attrs)
+        it = range(0, attrs["size"], chunk_size)
+        if progress_bar:
+            it = tqdm.tqdm(it, desc=f"Reading {path[-1]}", unit_scale=int(chunk_size / 1024), unit='KB')
+
+        for i in it:
+            read_res = self.nfs3.read(fh, i, chunk_size)
+            if read_res["status"] == NFS3_OK:
+                yield read_res["resok"]["data"]
+            else:
+                raise IOError("NFS read failed")
+
+    def read(self, path: str, chunk_size: int = 1024 * 50, progress_bar=False):
+        return b''.join(list(self._read(path, chunk_size, progress_bar)))
 
     def write(self, path: str, contents: bytes, chunk_size: int = 1024 * 50, progress_bar=False):
         path = self._splitpath(path)
