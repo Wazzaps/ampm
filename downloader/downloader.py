@@ -1,26 +1,51 @@
-from nfs import nfs_connection
+from click import Path
+
+from nfs import nfs_connection, NfsConnection
 import time
-
-with nfs_connection('127.0.0.1', '/mnt/myshareddir') as nfs:
-    # # List dir test
-    # dir_listing = list(nfs.list_dir('.'))
-    # print(dir_listing)
-
-    # # Upload test
-    # t = time.time()
-    # nfs.write('a/foo.txt', b'A'*1024*1024*1024, progress_bar=True)
-    # print('Upload took', time.time() - t, 'seconds')
-
-    # Download test
-    t = time.time()
-    buf = nfs.read('a/foo.txt', progress_bar=True)
-    print('Begin:', buf[:10])
-    print('End:', buf[-10:])
-    print('Len:', len(buf))
-    print('Download took', time.time() - t, 'seconds')
+import click
 
 
+def f():
+    with nfs_connection('127.0.0.1', '/mnt/myshareddir') as nfs:
+        # # List dir test
+        # dir_listing = list(nfs.list_dir('.'))
+        # print(dir_listing)
+
+        # # Upload test
+        # t = time.time()
+        # nfs.write('a/foo.txt', b'A'*1024*1024*1024, progress_bar=True)
+        # print('Upload took', time.time() - t, 'seconds')
+
+        # Download test
+        t = time.time()
+        buf = nfs.read('a/foo.txt', progress_bar=True)
+        print('Begin:', buf[:10])
+        print('End:', buf[-10:])
+        print('Len:', len(buf))
+        print('Download took', time.time() - t, 'seconds')
 
 
+SHAREDIR_MOUNT_PATH = '/mnt/sharedir'
+SHAREDIR_IP = '127.0.0.1'
 
 
+@click.command()
+@click.option('--local_path', help='Local Path', prompt="Local Path")
+@click.option('--remote_path', prompt='Remote Path', help='Remote Path')
+def upload(local_path: Path, remote_path: Path):
+    nfs: NfsConnection
+    with nfs_connection(SHAREDIR_IP, SHAREDIR_MOUNT_PATH) as nfs:
+        dir_listing = list(nfs.list_dir('.'))
+        print(dir_listing)
+        with open(local_path) as f:
+            nfs.write(remote_path, f.read(), progress_bar=True)
+        dir_listing = list(nfs.list_dir('.'))
+        print(dir_listing)
+
+
+def main():
+    upload()
+
+
+if __name__ == '__main__':
+    main()

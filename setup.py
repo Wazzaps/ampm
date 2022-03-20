@@ -8,5 +8,6 @@ setup(
     license='',
     author='baba',
     author_email='',
-    description='downloader'
+    description='downloader',
+    requires=["pyNfsClient", "tqdm", "click"]
 )
