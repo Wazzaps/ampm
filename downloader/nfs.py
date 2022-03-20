@@ -2,12 +2,12 @@ import contextlib
 import os
 from math import ceil
 from pathlib import Path
-from typing import List, Iterable, ContextManager
+from typing import List, Iterable, ContextManager, Optional
 
 import pyNfsClient.utils
 import tqdm
 from pyNfsClient import (Portmap, Mount, NFSv3, MNT3_OK, NFS_PROGRAM,
-                         NFS_V3, NFS3_OK, DATA_SYNC, UNCHECKED, NFS3ERR_EXIST, UNSTABLE)
+                         NFS_V3, NFS3_OK, UNCHECKED, NFS3ERR_EXIST, UNSTABLE)
 
 
 # Hotpatch pyNfsClient's `str_to_bytes` to accept bytes
@@ -21,6 +21,21 @@ def str_to_bytes(str_v):
 
 
 pyNfsClient.utils.str_to_bytes.__code__ = str_to_bytes.__code__
+
+
+def _calc_dir_size(path: Path) -> int:
+    """
+    Calculate the size of a directory.
+
+    :param path: Path to the directory.
+    :return: Sum of all file sizes inside the directory.
+    """
+    total_size = 0
+    for dirpath, _dirnames, filenames in os.walk(path):
+        for f in filenames:
+            fp = os.path.join(dirpath, f)
+            total_size += os.path.getsize(fp)
+    return total_size
 
 
 class NfsConnection:
@@ -69,7 +84,6 @@ class NfsConnection:
             mount.disconnect()
             portmap.disconnect()
 
-
     @staticmethod
     def _splitpath(remote_path: str) -> List[str]:
         remote_path = list(remote_path.strip('/').split('/'))
@@ -93,9 +107,9 @@ class NfsConnection:
 
         return fh, attrs
 
-    def _create_with_dirs(self, remote_path: List[str]):
+    def _mkdir_recursive(self, remote_path: List[str]):
         dir_fh = self.root_fh
-        for path_part in remote_path[:-1]:
+        for path_part in remote_path:
             mkdir_res = self.nfs3.mkdir(dir_fh, path_part, mode=0o777)
             # print('--- mkdir_res ---')
             # print(mkdir_res)
@@ -116,6 +130,11 @@ class NfsConnection:
             else:
                 raise IOError("NFS mkdir failed")
 
+        return dir_fh
+
+    def _create_with_dirs(self, remote_path: List[str]):
+        dir_fh = self._mkdir_recursive(remote_path[:-1])
+
         create_res = self.nfs3.create(dir_fh, remote_path[-1], UNCHECKED, mode=0o777, size=0)
         # print('--- create_res ---')
         # print(create_res)
@@ -124,7 +143,7 @@ class NfsConnection:
         else:
             raise IOError("NFS create failed")
 
-    def list_dir(self, remote_path):
+    def list_dir(self, remote_path: str):
         fh, _attrs = self._open(self._splitpath(remote_path))
         readdir_res = self.nfs3.readdir(fh)
         if readdir_res["status"] == NFS3_OK:
@@ -133,7 +152,23 @@ class NfsConnection:
                 yield entry[0]['name']
                 entry = entry[0]['nextentry']
 
-    def _read(self, remote_path: str, chunk_size: int = 1024 * 50, progress_bar=False):
+    def rename(self, old_path: str, new_path: str):
+        old_path_parts = self._splitpath(old_path)
+        new_path_parts = self._splitpath(new_path)
+        old_fh, _attrs = self._open(old_path_parts[:-1])
+        new_fh = self._mkdir_recursive(new_path_parts[:-1])
+        rename_res = self.nfs3.rename(old_fh, old_path_parts[-1], new_fh, new_path_parts[-1])
+
+        return rename_res["status"] == NFS3_OK
+
+    def symlink(self, dest_path: str, link_path: str):
+        link_path = self._splitpath(link_path)
+        fh, _attrs = self._open(link_path[:-1])
+        symlink_res = self.nfs3.symlink(fh, link_path[-1], dest_path)
+        if symlink_res["status"] != NFS3_OK:
+            raise IOError("NFS symlink failed")
+
+    def read_stream(self, remote_path: str, chunk_size: int = 1024 * 50, progress_bar=False):
         remote_path = self._splitpath(remote_path)
         fh, attrs = self._open(remote_path)
         if attrs["type"] != 1:
@@ -143,7 +178,7 @@ class NfsConnection:
         left = attrs["size"]
         bar = None
         if progress_bar:
-            bar = tqdm.tqdm(total=ceil(attrs["size"] / 1024), desc=f"Reading {remote_path[-1]}", unit='KB')
+            bar = tqdm.tqdm(total=ceil(attrs["size"] / 1024), desc=f"Reading {remote_path[-1]}", unit='KiB')
 
         while left > 0:
             read_res = self.nfs3.read(fh, offset, chunk_size)
@@ -153,30 +188,33 @@ class NfsConnection:
                     raise IOError("NFS read returned 0 bytes")
                 offset += len(data)
                 left -= len(data)
-                bar.update(len(data) // 1024)
+                if bar:
+                    bar.update(len(data) // 1024)
                 yield data
             else:
                 raise IOError("NFS read failed")
 
         if bar:
+            bar.reset()
+            bar.update(bar.total)
             bar.close()
 
     def read(self, remote_path: str, chunk_size: int = 1024 * 50, progress_bar=False):
-        return b''.join(list(self._read(remote_path, chunk_size, progress_bar)))
+        return b''.join(list(self.read_stream(remote_path, chunk_size, progress_bar)))
 
     def download(self, local_path: Path, remote_path: str, chunk_size: int = 1024 * 50, progress_bar=False):
         with open(local_path, 'wb') as f:
-            for chunk in self._read(remote_path, chunk_size, progress_bar):
+            for chunk in self.read_stream(remote_path, chunk_size, progress_bar):
                 f.write(chunk)
 
-    def _write(self, contents_gen: Iterable[bytes], remote_path: str, contents_len: int, progress_bar=False):
+    def write_stream(self, contents_gen: Iterable[bytes], remote_path: str, contents_len: int, progress_bar=False):
         remote_path = self._splitpath(remote_path)
         fh = self._create_with_dirs(remote_path)
 
         offset = 0
         bar = None
         if progress_bar:
-            bar = tqdm.tqdm(total=ceil(contents_len / 1024), desc=f"Writing {remote_path[-1]}", unit='KB')
+            bar = tqdm.tqdm(total=ceil(contents_len / 1024), desc=f"Writing {remote_path[-1]}", unit='KiB')
 
         for chunk in contents_gen:
             write_res = self.nfs3.write(fh, offset=offset, count=len(chunk), content=chunk, stable_how=UNSTABLE)
@@ -187,11 +225,13 @@ class NfsConnection:
             else:
                 raise IOError("NFS write failed")
 
+            offset += len(chunk)
             if bar:
-                offset += len(chunk)
                 bar.update(len(chunk) // 1024)
 
         if bar:
+            bar.reset()
+            bar.update(bar.total)
             bar.close()
 
     def write(self, contents: bytes, remote_path: str, chunk_size: int = 1024 * 50, progress_bar=False):
@@ -199,15 +239,59 @@ class NfsConnection:
             for i in range(0, len(contents), chunk_size):
                 yield contents[i:i + chunk_size]
 
-        self._write(chunked(), remote_path, len(contents), progress_bar)
+        self.write_stream(chunked(), remote_path, len(contents), progress_bar)
 
-    def upload(self, local_path: Path, remote_path: str, chunk_size: int = 1024 * 50, progress_bar=False):
-        with open(local_path, 'rb') as f:
-            file_len = f.seek(0, 2)
-            f.seek(0)
+    def _upload_dir(self, local_path: Path, remote_path: str, progress_bar: Optional[tqdm.tqdm] = None):
+        for entry in os.listdir(local_path):
+            entry = Path(local_path / entry)
+            if not entry.is_symlink() and entry.is_dir():
+                self._upload_dir(entry, f"{remote_path}/{entry.name}", progress_bar)
+            else:
+                file_size = entry.stat().st_size
 
-            def chunked():
-                for i in range(0, file_len, chunk_size):
-                    yield f.read(chunk_size)
+                self.upload(entry, f"{remote_path}/{entry.name}")
 
-            self._write(chunked(), remote_path, file_len, progress_bar)
+                if progress_bar:
+                    progress_bar.update(file_size // 1024)
+
+    def upload(
+            self,
+            local_path: Path,
+            remote_path: str,
+            chunk_size: int = 1024 * 50,
+            allow_dir=False,
+            progress_bar=False
+    ):
+        if local_path.is_symlink():
+            self.symlink(str(local_path.readlink()), remote_path)
+
+        elif local_path.is_dir():
+            if not allow_dir:
+                raise IOError("Tried to upload a directory, but `allow_dir` was set to False")
+
+            whole_dir_size = _calc_dir_size(local_path)
+            if progress_bar:
+                bar = tqdm.tqdm(total=ceil(whole_dir_size / 1024), unit='KB', desc=f"Uploading dir {local_path}")
+            else:
+                bar = None
+
+            self._upload_dir(local_path, remote_path, bar)
+
+            if bar:
+                bar.reset()
+                bar.update(bar.total)
+                bar.close()
+
+        elif local_path.is_file():
+            with open(local_path, 'rb') as f:
+                file_len = f.seek(0, 2)
+                f.seek(0)
+
+                def chunked():
+                    for i in range(0, file_len, chunk_size):
+                        yield f.read(chunk_size)
+
+                self.write_stream(chunked(), remote_path, file_len, progress_bar)
+
+        else:
+            raise IOError("Tried to upload a path that is neither a file nor a directory")

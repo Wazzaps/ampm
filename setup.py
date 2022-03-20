@@ -9,5 +9,5 @@ setup(
     author='baba',
     author_email='',
     description='downloader',
-    requires=["pyNfsClient", "tqdm", "click"]
+    requires=["pyNfsClient", "tqdm", "click", "toml"]
 )
