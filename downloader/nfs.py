@@ -1,6 +1,8 @@
 import contextlib
 import os
-from typing import List
+from math import ceil
+from pathlib import Path
+from typing import List, Iterable
 
 import pyNfsClient.utils
 import tqdm
@@ -26,19 +28,20 @@ class NfsConnection:
         self.nfs3 = nfs3
         self.root_fh = root_fh
 
-    def _splitpath(self, path: str) -> List[str]:
-        path = list(path.strip('/').split('/'))
-        while '' in path:
-            path.remove('')
-        while '.' in path:
-            path.remove('.')
-        return path
+    @staticmethod
+    def _splitpath(remote_path: str) -> List[str]:
+        remote_path = list(remote_path.strip('/').split('/'))
+        while '' in remote_path:
+            remote_path.remove('')
+        while '.' in remote_path:
+            remote_path.remove('.')
+        return remote_path
 
     # Returns (file handle, file attributes)
-    def _open(self, path: List[str]) -> (bytes, dict):
+    def _open(self, remote_path: List[str]) -> (bytes, dict):
         fh = self.root_fh
         attrs = {}
-        for path_part in path:
+        for path_part in remote_path:
             lookup_res = self.nfs3.lookup(fh, path_part)
             if lookup_res["status"] == NFS3_OK:
                 fh = lookup_res["resok"]["object"]["data"]
@@ -48,9 +51,9 @@ class NfsConnection:
 
         return fh, attrs
 
-    def _create_with_dirs(self, path: List[str]):
+    def _create_with_dirs(self, remote_path: List[str]):
         dir_fh = self.root_fh
-        for path_part in path[:-1]:
+        for path_part in remote_path[:-1]:
             mkdir_res = self.nfs3.mkdir(dir_fh, path_part, mode=0o777)
             # print('--- mkdir_res ---')
             # print(mkdir_res)
@@ -71,7 +74,7 @@ class NfsConnection:
             else:
                 raise IOError("NFS mkdir failed")
 
-        create_res = self.nfs3.create(dir_fh, path[-1], UNCHECKED, mode=0o777, size=0)
+        create_res = self.nfs3.create(dir_fh, remote_path[-1], UNCHECKED, mode=0o777, size=0)
         # print('--- create_res ---')
         # print(create_res)
         if create_res["status"] == NFS3_OK:
@@ -79,8 +82,8 @@ class NfsConnection:
         else:
             raise IOError("NFS create failed")
 
-    def list_dir(self, path):
-        fh, _attrs = self._open(self._splitpath(path))
+    def list_dir(self, remote_path):
+        fh, _attrs = self._open(self._splitpath(remote_path))
         readdir_res = self.nfs3.readdir(fh)
         if readdir_res["status"] == NFS3_OK:
             entry = readdir_res["resok"]["reply"]["entries"]
@@ -88,37 +91,53 @@ class NfsConnection:
                 yield entry[0]['name']
                 entry = entry[0]['nextentry']
 
-    def _read(self, path: str, chunk_size: int = 1024 * 50, progress_bar=False):
-        path = self._splitpath(path)
-        fh, attrs = self._open(path)
+    def _read(self, remote_path: str, chunk_size: int = 1024 * 50, progress_bar=False):
+        remote_path = self._splitpath(remote_path)
+        fh, attrs = self._open(remote_path)
         if attrs["type"] != 1:
             raise IOError("Tried to read a non-file")
 
-        it = range(0, attrs["size"], chunk_size)
+        offset = 0
+        left = attrs["size"]
+        bar = None
         if progress_bar:
-            it = tqdm.tqdm(it, desc=f"Reading {path[-1]}", unit_scale=int(chunk_size / 1024), unit='KB')
+            bar = tqdm.tqdm(total=ceil(attrs["size"] / 1024), desc=f"Reading {remote_path[-1]}", unit='KB')
 
-        for i in it:
-            read_res = self.nfs3.read(fh, i, chunk_size)
+        while left > 0:
+            read_res = self.nfs3.read(fh, offset, chunk_size)
             if read_res["status"] == NFS3_OK:
-                yield read_res["resok"]["data"]
+                data = read_res["resok"]["data"]
+                if len(data) == 0:
+                    raise IOError("NFS read returned 0 bytes")
+                offset += len(data)
+                left -= len(data)
+                bar.update(len(data) // 1024)
+                yield data
             else:
                 raise IOError("NFS read failed")
 
-    def read(self, path: str, chunk_size: int = 1024 * 50, progress_bar=False):
-        return b''.join(list(self._read(path, chunk_size, progress_bar)))
+        if bar:
+            bar.close()
 
-    def write(self, path: str, contents: bytes, chunk_size: int = 1024 * 50, progress_bar=False):
-        path = self._splitpath(path)
-        fh = self._create_with_dirs(path)
+    def read(self, remote_path: str, chunk_size: int = 1024 * 50, progress_bar=False):
+        return b''.join(list(self._read(remote_path, chunk_size, progress_bar)))
 
-        it = range(0, len(contents), chunk_size)
+    def download(self, local_path: Path, remote_path: str, chunk_size: int = 1024 * 50, progress_bar=False):
+        with open(local_path, 'wb') as f:
+            for chunk in self._read(remote_path, chunk_size, progress_bar):
+                f.write(chunk)
+
+    def _write(self, contents_gen: Iterable[bytes], remote_path: str, contents_len: int, progress_bar=False):
+        remote_path = self._splitpath(remote_path)
+        fh = self._create_with_dirs(remote_path)
+
+        offset = 0
+        bar = None
         if progress_bar:
-            it = tqdm.tqdm(it, desc=f"Writing {path[-1]}", unit_scale=int(chunk_size / 1024), unit='KB')
+            bar = tqdm.tqdm(total=ceil(contents_len / 1024), desc=f"Writing {remote_path[-1]}", unit='KB')
 
-        for i in it:
-            chunk = contents[i:i + chunk_size]
-            write_res = self.nfs3.write(fh, offset=i, count=len(chunk), content=chunk, stable_how=UNSTABLE)
+        for chunk in contents_gen:
+            write_res = self.nfs3.write(fh, offset=offset, count=len(chunk), content=chunk, stable_how=UNSTABLE)
             # print('--- write_res ---')
             # print(write_res)
             if write_res["status"] == NFS3_OK:
@@ -126,15 +145,41 @@ class NfsConnection:
             else:
                 raise IOError("NFS write failed")
 
+            if bar:
+                offset += len(chunk)
+                bar.update(len(chunk) // 1024)
+
+        if bar:
+            bar.close()
+
+    def write(self, contents: bytes, remote_path: str, chunk_size: int = 1024 * 50, progress_bar=False):
+        def chunked():
+            for i in range(0, len(contents), chunk_size):
+                yield contents[i:i + chunk_size]
+
+        self._write(chunked(), remote_path, len(contents), progress_bar)
+
+    def upload(self, local_path: Path, remote_path: str, chunk_size: int = 1024 * 50, progress_bar=False):
+        with open(local_path, 'rb') as f:
+            file_len = f.seek(0, 2)
+            f.seek(0)
+
+            def chunked():
+                for i in range(0, file_len, chunk_size):
+                    yield f.read(chunk_size)
+
+            self._write(chunked(), remote_path, file_len, progress_bar)
+
 
 @contextlib.contextmanager
 def nfs_connection(host, mount_path):
-    auth = {"flavor": 1,
-            "machine_name": "localhost",
-            "uid": 0,
-            "gid": 0,
-            "aux_gid": list(),
-            }
+    auth = {
+        "flavor": 1,
+        "machine_name": "localhost",
+        "uid": 0,
+        "gid": 0,
+        "aux_gid": list(),
+    }
 
     # portmap initialization
     portmap = Portmap(host, timeout=3600)
@@ -152,7 +197,6 @@ def nfs_connection(host, mount_path):
         nfs3 = None
         try:
             nfs_port = portmap.getport(NFS_PROGRAM, NFS_V3)
-            # nfs actions
             nfs3 = NFSv3(host, nfs_port, 3600, auth)
             nfs3.connect()
             yield NfsConnection(nfs3, root_fh)
