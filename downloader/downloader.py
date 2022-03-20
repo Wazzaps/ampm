@@ -34,7 +34,7 @@ def f():
 @click.option('--remote-path', prompt='Remote Path', help='Remote Path')
 def upload(local_path: Path, remote_path: str):
     nfs: NfsConnection
-    with nfs_connection(SHAREDIR_IP, SHAREDIR_MOUNT_PATH) as nfs:
+    with NfsConnection.connect(SHAREDIR_IP, SHAREDIR_MOUNT_PATH) as nfs:
         dir_listing = list(nfs.list_dir('.'))
         print(dir_listing)
 

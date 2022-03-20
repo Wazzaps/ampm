@@ -2,7 +2,7 @@ import contextlib
 import os
 from math import ceil
 from pathlib import Path
-from typing import List, Iterable
+from typing import List, Iterable, ContextManager
 
 import pyNfsClient.utils
 import tqdm
@@ -27,6 +27,48 @@ class NfsConnection:
     def __init__(self, nfs3: NFSv3, root_fh: bytes):
         self.nfs3 = nfs3
         self.root_fh = root_fh
+
+    @staticmethod
+    @contextlib.contextmanager
+    def connect(host, remote_path) -> ContextManager["NfsConnection"]:
+        auth = {
+            "flavor": 1,
+            "machine_name": "localhost",
+            "uid": 0,
+            "gid": 0,
+            "aux_gid": list(),
+        }
+
+        # portmap initialization
+        portmap = Portmap(host, timeout=3600)
+        portmap.connect()
+
+        # mount initialization
+        mnt_port = portmap.getport(Mount.program, Mount.program_version)
+        mount = Mount(host=host, port=mnt_port, timeout=3600, auth=auth)
+        mount.connect()
+
+        # do mount
+        mnt_res = mount.mnt(remote_path, auth)
+        if mnt_res["status"] == MNT3_OK:
+            root_fh = mnt_res["mountinfo"]["fhandle"]
+            nfs3 = None
+            try:
+                nfs_port = portmap.getport(NFS_PROGRAM, NFS_V3)
+                nfs3 = NFSv3(host, nfs_port, 3600, auth)
+                nfs3.connect()
+                yield NfsConnection(nfs3, root_fh)
+            finally:
+                if nfs3:
+                    nfs3.disconnect()
+                mount.umnt(auth)
+                mount.disconnect()
+                portmap.disconnect()
+        else:
+            print("Mount failed")
+            mount.disconnect()
+            portmap.disconnect()
+
 
     @staticmethod
     def _splitpath(remote_path: str) -> List[str]:
@@ -169,44 +211,3 @@ class NfsConnection:
                     yield f.read(chunk_size)
 
             self._write(chunked(), remote_path, file_len, progress_bar)
-
-
-@contextlib.contextmanager
-def nfs_connection(host, mount_path):
-    auth = {
-        "flavor": 1,
-        "machine_name": "localhost",
-        "uid": 0,
-        "gid": 0,
-        "aux_gid": list(),
-    }
-
-    # portmap initialization
-    portmap = Portmap(host, timeout=3600)
-    portmap.connect()
-
-    # mount initialization
-    mnt_port = portmap.getport(Mount.program, Mount.program_version)
-    mount = Mount(host=host, port=mnt_port, timeout=3600, auth=auth)
-    mount.connect()
-
-    # do mount
-    mnt_res = mount.mnt(mount_path, auth)
-    if mnt_res["status"] == MNT3_OK:
-        root_fh = mnt_res["mountinfo"]["fhandle"]
-        nfs3 = None
-        try:
-            nfs_port = portmap.getport(NFS_PROGRAM, NFS_V3)
-            nfs3 = NFSv3(host, nfs_port, 3600, auth)
-            nfs3.connect()
-            yield NfsConnection(nfs3, root_fh)
-        finally:
-            if nfs3:
-                nfs3.disconnect()
-            mount.umnt(auth)
-            mount.disconnect()
-            portmap.disconnect()
-    else:
-        print("Mount failed")
-        mount.disconnect()
-        portmap.disconnect()
