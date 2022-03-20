@@ -1,0 +1,16 @@
+[artifact]
+description="My best toolchain"
+name="baba toolchain"
+
+[attributes]
+type="toolchain"
+version="1.0.0"
+arch="x86_64"
+device="linux"
+libc="musl"
+supported_compilations=["shared", "static"]
+
+[path]
+type="tar.gz"
+location="my_nfs/baba/toolchains/baba.tar.gz"
+hash="45226aa24b72ce0ccc4ff73eefe2e26f"
