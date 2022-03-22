@@ -2,9 +2,10 @@ import base64
 import dataclasses
 import datetime
 import hashlib
+import re
 import toml
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, Iterable
 from functools import cached_property
 
 from ampm.nfs import NfsConnection
@@ -56,7 +57,7 @@ class ArtifactMetadata:
         return ArtifactMetadata(
             name=data["artifact"]["name"],
             description=data["artifact"]["description"],
-            pubdate=data["artifact"]["pubdate"],
+            pubdate=datetime.datetime.fromisoformat(data["artifact"]["pubdate"]),
             type=data["artifact"]["type"],
             attributes=data["attributes"],
             env=data["env"],
@@ -88,9 +89,12 @@ class ArtifactStore:
         assert len(artifact_hash) == 32, f'Invalid artifact hash: {artifact_hash}'
         return self.local_store / 'artifacts' / artifact_type.lower() / (artifact_hash.lower() + suffix)
 
+    def _metadata_dir(self, artifact_type: str) -> Path:
+        return self.local_store / 'metadata' / artifact_type.lower()
+
     def _metadata_path(self, artifact_type: str, artifact_hash: str, suffix: str = '') -> Path:
         assert len(artifact_hash) == 32, f'Invalid artifact hash: {artifact_hash}'
-        return self.local_store / 'metadata' / artifact_type.lower() / (artifact_hash.lower() + '.toml' + suffix)
+        return self._metadata_dir(artifact_type) / (artifact_hash.lower() + '.toml' + suffix)
 
     # TODO: Maybe don't add name for dirs?
     @staticmethod
@@ -102,6 +106,41 @@ class ArtifactStore:
     def _remote_metadata_path(artifact_type: str, artifact_hash: str, suffix: str = '') -> str:
         assert len(artifact_hash) == 32, f'Invalid artifact hash: {artifact_hash}'
         return str(Path('metadata') / artifact_type.lower() / (artifact_hash.lower() + '.toml' + suffix))
+
+    @staticmethod
+    def _remote_partial_metadata_path(artifact_type: str) -> str:
+        return str(Path('metadata') / artifact_type.lower())
+
+    def download_metadata_for_type(self, artifact_type: str):
+        base_path = self._remote_partial_metadata_path(artifact_type)
+        try:
+            for metadata_path in self.nfs.walk_files(base_path):
+                matches = re.match(r'(.*)/([a-z0-9]{32})\.toml$', metadata_path[len(base_path):])
+                if matches:
+                    type_extra = matches.group(1)
+                    artifact_hash = matches.group(2)
+                    tmp_metadata_path = self._metadata_path(artifact_type + type_extra, artifact_hash, '.tmp')
+                    tmp_metadata_path.parent.mkdir(parents=True, exist_ok=True)
+                    self.nfs.download(tmp_metadata_path, self._remote_metadata_path(artifact_type + type_extra, artifact_hash))
+                    tmp_metadata_path.rename(self._metadata_path(artifact_type + type_extra, artifact_hash))
+        except IOError:
+            raise FileNotFoundError(f'Artifact type not found: {artifact_type}')
+
+    def _load_metadata_by_type(self, artifact_type: str) -> Iterable[ArtifactMetadata]:
+        for metadata_path in self._metadata_dir(artifact_type).glob('**/*.toml'):
+            yield ArtifactMetadata.from_dict(toml.load(metadata_path))
+
+    def get_metadata_by_attributes(self, artifact_type: str, attributes: Dict[str, str]) -> Iterable[ArtifactMetadata]:
+        self.download_metadata_for_type(artifact_type)
+        for artifact_metadata in self._load_metadata_by_type(artifact_type):
+            for attr in attributes:
+                if attributes[attr].startswith('@'):
+                    raise NotImplementedError('Attribute filters not supported yet')
+
+                if attr not in artifact_metadata.attributes or attributes[attr] != artifact_metadata.attributes[attr]:
+                    break
+            else:
+                yield artifact_metadata
 
     def get_metadata_by_type_hash(self, artifact_type: str, artifact_hash: str) -> ArtifactMetadata:
         metadata_path = self._metadata_path(artifact_type, artifact_hash)
@@ -117,6 +156,18 @@ class ArtifactStore:
             tmp_metadata_path.rename(metadata_path)
 
         return ArtifactMetadata.from_dict(toml.load(metadata_path))
+
+    def find_artifacts(self, identifier: str, attributes: Dict[str, str], require_hash_no_attrs: bool):
+        identifier = identifier.split(':', 1)
+        if require_hash_no_attrs and not attributes and len(identifier) != 2:
+            raise LookupError(f'If no attributes are specified then IDENTIFIER must be in the format <type>:<hash>, '
+                              f'but got: "{identifier[0]}"')
+
+        if len(identifier) == 2:
+            artifact_metadata = self.get_metadata_by_type_hash(identifier[0], identifier[1])
+            yield artifact_metadata
+        else:
+            yield from self.get_metadata_by_attributes(identifier[0], attributes)
 
     def get_artifact_by_type_hash(self, artifact_type: str, artifact_hash: str) -> Path:
         artifact_metadata = self.get_metadata_by_type_hash(artifact_type, artifact_hash)

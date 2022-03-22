@@ -1,5 +1,6 @@
 import datetime
 import hashlib
+import json
 import sys
 from pathlib import Path
 from typing import Tuple, Optional, Dict
@@ -109,7 +110,7 @@ def upload(
 @cli.command()
 @click.argument(
     'IDENTIFIER',
-    required=False
+    required=True
 )
 def get(identifier: Optional[str]):
     """
@@ -127,18 +128,91 @@ def get(identifier: Optional[str]):
         with NfsConnection.connect(SHAREDIR_IP, SHAREDIR_MOUNT_PATH) as nfs:
             store = ArtifactStore(local_store=LOCAL_STORE, nfs=nfs)
             print(store.get_artifact_by_type_hash(identifier[0], identifier[1]))
+    except (LookupError, FileNotFoundError) as e:
+        print(' '.join(e.args), file=sys.stderr)
+        sys.exit(1)
     except PermissionError:
         print(f'The local artifact store ({str(LOCAL_STORE)}) doesn\'t exist and you\'re not root. '
               f'Please run `sudo mkdir /var/ampm && sudo chmod 777 /var/ampm`.', file=sys.stderr)
         sys.exit(1)
-    except FileNotFoundError:
-        print(f'Artifact not found: {identifier[0]}:{identifier[1]}', file=sys.stderr)
-        sys.exit(1)
+
+
+def _format_artifact_metadata(artifact_metadata: ArtifactMetadata) -> str:
+    combined_attrs = {
+        'name': artifact_metadata.name,
+        'description': artifact_metadata.description,
+        'pubdate': artifact_metadata.pubdate.isoformat(sep=' '),
+    }
+    if artifact_metadata.path_location:
+        combined_attrs['location'] = artifact_metadata.path_location
+    combined_attrs.update(artifact_metadata.attributes)
+
+    INDENT = 4
+    SPACER = ', '
+    MAX_LINE_LENGTH = 120
+    parts = [f'{k}={repr(v)}' for k, v in combined_attrs.items()]
+    combined_attrs = ' ' * INDENT
+    curr_line_len = 0
+
+    for part in parts:
+        if (curr_line_len + len(part) + len(SPACER) > MAX_LINE_LENGTH - INDENT) and curr_line_len > 0:
+            combined_attrs += '\n' + ' ' * INDENT
+            curr_line_len = 0
+
+        if curr_line_len > 0:
+            combined_attrs += SPACER
+
+        combined_attrs += part
+        curr_line_len += len(part) + len(SPACER)
+
+    return f'{artifact_metadata.type}:{artifact_metadata.hash}\n{combined_attrs}'
 
 
 @cli.command(name='list')
-def list_():
-    raise NotImplementedError()
+@click.argument(
+    'IDENTIFIER',
+    required=True
+)
+@click.option('-a', '--attr', help='Artifact attributes', multiple=True, callback=_parse_dict)
+@click.option(
+    '-f', '--format', 'output_format',
+    type=click.Choice(['pretty', 'json']),
+    help='Output format',
+    default='pretty',
+)
+def list_(identifier: Optional[str], attr: Dict[str, str], output_format: str):
+    """
+        Get info about artifacts
+
+        IDENTIFIER is in the format <type>:<hash>, e.g.: foobar:mbf5qxqli76zx7btc5n7fkq47tjs6cl2.
+        or <type> e.g.: foobar
+
+        You may specify attributes to filter down the results
+    """
+
+    # TODO: Don't connect to NFS every time
+    try:
+        with NfsConnection.connect(SHAREDIR_IP, SHAREDIR_MOUNT_PATH) as nfs:
+            store = ArtifactStore(local_store=LOCAL_STORE, nfs=nfs)
+            if output_format == 'pretty':
+                print('\n\n'.join(
+                    _format_artifact_metadata(artifact_metadata)
+                    for artifact_metadata in store.find_artifacts(identifier, attr, require_hash_no_attrs=False)
+                ))
+            elif output_format == 'json':
+                print(json.dumps(
+                    [artifact_metadata.to_dict() for artifact_metadata in store.find_artifacts(identifier, attr, require_hash_no_attrs=False)],
+                    indent=4,
+                ))
+            else:
+                raise ValueError(f'Unknown output format: {output_format}')
+    except (LookupError, FileNotFoundError) as e:
+        print(' '.join(e.args), file=sys.stderr)
+        sys.exit(1)
+    except PermissionError:
+        print(f'The local artifact store ({str(LOCAL_STORE)}) doesn\'t exist and you\'re not root. '
+              f'Please run `sudo mkdir /var/ampm && sudo chmod 777 /var/ampm`.', file=sys.stderr)
+        sys.exit(1)
 
 
 @cli.command()

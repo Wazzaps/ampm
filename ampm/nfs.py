@@ -7,7 +7,7 @@ from typing import List, Iterable, ContextManager, Optional
 import pyNfsClient.utils
 import tqdm
 from pyNfsClient import (Portmap, Mount, NFSv3, MNT3_OK, NFS_PROGRAM,
-                         NFS_V3, NFS3_OK, UNCHECKED, NFS3ERR_EXIST, UNSTABLE)
+                         NFS_V3, NFS3_OK, UNCHECKED, NFS3ERR_EXIST, UNSTABLE, NFS3ERR_NOTDIR)
 
 
 # Hotpatch pyNfsClient's `str_to_bytes` to accept bytes
@@ -151,6 +151,20 @@ class NfsConnection:
             while entry:
                 yield entry[0]['name']
                 entry = entry[0]['nextentry']
+
+    def walk_files(self, remote_path: str):
+        fh, _attrs = self._open(self._splitpath(remote_path))
+        readdir_res = self.nfs3.readdir(fh)
+        if readdir_res["status"] == NFS3_OK:
+            entry = readdir_res["resok"]["reply"]["entries"]
+            while entry:
+                if entry[0]['name'] != b'.' and entry[0]['name'] != b'..':
+                    yield from self.walk_files(remote_path + '/' + entry[0]['name'].decode())
+                entry = entry[0]['nextentry']
+        elif readdir_res["status"] == NFS3ERR_NOTDIR:
+            yield remote_path
+        else:
+            raise IOError(f"NFS readdir failed: code={readdir_res['status']}")
 
     def rename(self, old_path: str, new_path: str):
         old_path_parts = self._splitpath(old_path)
