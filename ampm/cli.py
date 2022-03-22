@@ -222,8 +222,39 @@ def list_(identifier: Optional[str], attr: Dict[str, str], output_format: str):
 
 
 @cli.command()
-def env():
-    raise NotImplementedError()
+@click.argument(
+    'IDENTIFIER',
+    required=True
+)
+@click.option('-a', '--attr', help='Artifact attributes', multiple=True, callback=_parse_dict)
+def env(identifier: str, attr: Dict[str, str]):
+    """
+        Fetch artifact from artifact storage, then print its environment variables
+
+        IDENTIFIER is in the format <type>:<hash>, e.g.: foobar:mbf5qxqli76zx7btc5n7fkq47tjs6cl2
+    """
+
+    # TODO: Don't connect to NFS every time
+    try:
+        with NfsConnection.connect(SHAREDIR_IP, SHAREDIR_MOUNT_PATH) as nfs:
+            store = ArtifactStore(local_store=LOCAL_STORE, nfs=nfs)
+            artifacts = list(store.find_artifacts(identifier, attr))
+            if len(artifacts) == 0:
+                raise FileNotFoundError(f'Artifact not found: {identifier}')
+            elif len(artifacts) > 1:
+                raise LookupError(
+                    f'Ambiguous artifact identifier: {identifier}, found multiple options:\n' +
+                    '\n\n'.join(_format_artifact_metadata(artifact_metadata) for artifact_metadata in artifacts)
+                )
+            store.get_artifact_by_metadata(artifacts[0])
+            print('\n'.join(f'export {k}={v}' for k, v in artifacts[0].env.items()))
+    except (LookupError, FileNotFoundError) as e:
+        print(' '.join(e.args), file=sys.stderr)
+        sys.exit(1)
+    except PermissionError:
+        print(f'The local artifact store ({str(LOCAL_STORE)}) doesn\'t exist and you\'re not root. '
+              f'Please run `sudo mkdir /var/ampm && sudo chmod 777 /var/ampm`.', file=sys.stderr)
+        sys.exit(1)
 
 
 @cli.command()

@@ -143,6 +143,10 @@ class ArtifactStore:
             else:
                 yield artifact_metadata
 
+    def _get_artifact_target(self, artifact_metadata: ArtifactMetadata) -> Path:
+        assert artifact_metadata.path_type in ('file', 'dir'), 'Downloading compressed artifacts not supported yet'
+        return self._artifact_path(artifact_metadata.type, artifact_metadata.hash) / artifact_metadata.name
+
     def get_metadata_by_type_hash(self, artifact_type: str, artifact_hash: str) -> ArtifactMetadata:
         metadata_path = self._metadata_path(artifact_type, artifact_hash, '.toml')
         metadata = None
@@ -156,13 +160,13 @@ class ArtifactStore:
             except IOError:
                 raise FileNotFoundError(f'Artifact not found: {artifact_type}:{artifact_hash}')
 
-            metadata = ArtifactMetadata.from_dict(toml.load(metadata_path))
+            metadata = ArtifactMetadata.from_dict(toml.load(tmp_metadata_path))
             self._metadata_path(artifact_type, artifact_hash, '.env').write_text(
                 '\n'.join(f'export {k}={v}' for k, v in metadata.env.items())
             )
-            self._metadata_path(artifact_type, artifact_hash, '.target').symlink_to(
-                self._get_artifact_target(metadata)
-            )
+            target_file = self._metadata_path(artifact_type, artifact_hash, '.target')
+            target_file.unlink(missing_ok=True)
+            target_file.symlink_to(self._get_artifact_target(metadata))
             tmp_metadata_path.rename(metadata_path)
 
         return metadata or ArtifactMetadata.from_dict(toml.load(metadata_path))
@@ -202,9 +206,9 @@ class ArtifactStore:
             self._metadata_path(artifact_metadata.type, artifact_metadata.hash, '.env').write_text(
                 '\n'.join(f'export {k}={v}' for k, v in artifact_metadata.env.items())
             )
-            self._metadata_path(artifact_metadata.type, artifact_metadata.hash, '.target').symlink_to(
-                artifact_path / artifact_metadata.name
-            )
+            target_file = self._metadata_path(artifact_metadata.type, artifact_metadata.hash, '.target')
+            target_file.unlink(missing_ok=True)
+            target_file.symlink_to(self._get_artifact_target(artifact_metadata))
 
             tmp_artifact_path.rename(artifact_path)
 
