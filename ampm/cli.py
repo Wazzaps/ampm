@@ -2,12 +2,12 @@ import datetime
 import hashlib
 import json
 import sys
+import click
+import colorama
 from pathlib import Path
 from typing import Tuple, Optional, Dict
-
 from ampm.artifact_store import ArtifactStore, ArtifactMetadata
 from ampm.nfs import NfsConnection
-import click
 
 LOCAL_STORE = Path('/var/ampm')
 
@@ -112,22 +112,27 @@ def upload(
     'IDENTIFIER',
     required=True
 )
-def get(identifier: Optional[str]):
+@click.option('-a', '--attr', help='Artifact attributes', multiple=True, callback=_parse_dict)
+def get(identifier: str, attr: Dict[str, str]):
     """
         Fetch artifact from artifact storage.
 
         IDENTIFIER is in the format <type>:<hash>, e.g.: foobar:mbf5qxqli76zx7btc5n7fkq47tjs6cl2
     """
 
-    identifier = identifier.split(':', 1)
-    if len(identifier) != 2:
-        raise click.BadParameter(f'IDENTIFIER must be in the format <type>:<hash>, but got: "{identifier[0]}"')
-
     # TODO: Don't connect to NFS every time
     try:
         with NfsConnection.connect(SHAREDIR_IP, SHAREDIR_MOUNT_PATH) as nfs:
             store = ArtifactStore(local_store=LOCAL_STORE, nfs=nfs)
-            print(store.get_artifact_by_type_hash(identifier[0], identifier[1]))
+            artifacts = list(store.find_artifacts(identifier, attr))
+            if len(artifacts) == 0:
+                raise FileNotFoundError(f'Artifact not found: {identifier}')
+            elif len(artifacts) > 1:
+                raise LookupError(
+                    f'Ambiguous artifact identifier: {identifier}, found multiple options:\n' +
+                    '\n\n'.join(_format_artifact_metadata(artifact_metadata) for artifact_metadata in artifacts)
+                )
+            print(store.get_artifact_by_metadata(artifacts[0]))
     except (LookupError, FileNotFoundError) as e:
         print(' '.join(e.args), file=sys.stderr)
         sys.exit(1)
@@ -150,7 +155,11 @@ def _format_artifact_metadata(artifact_metadata: ArtifactMetadata) -> str:
     INDENT = 4
     SPACER = ', '
     MAX_LINE_LENGTH = 120
-    parts = [f'{k}={repr(v)}' for k, v in combined_attrs.items()]
+    parts = [
+        f'{colorama.Fore.LIGHTGREEN_EX}{k}{colorama.Fore.RESET}='
+        f'{colorama.Fore.LIGHTYELLOW_EX}{repr(v)}{colorama.Fore.RESET}'
+        for k, v in combined_attrs.items()
+    ]
     combined_attrs = ' ' * INDENT
     curr_line_len = 0
 
@@ -165,7 +174,9 @@ def _format_artifact_metadata(artifact_metadata: ArtifactMetadata) -> str:
         combined_attrs += part
         curr_line_len += len(part) + len(SPACER)
 
-    return f'{artifact_metadata.type}:{artifact_metadata.hash}\n{combined_attrs}'
+    return f'{colorama.Style.BRIGHT}{artifact_metadata.type}{colorama.Style.RESET_ALL}' \
+           f'{colorama.Fore.LIGHTBLACK_EX}:{artifact_metadata.hash}{colorama.Fore.RESET}' \
+           f'\n{combined_attrs}'
 
 
 @cli.command(name='list')
@@ -194,16 +205,11 @@ def list_(identifier: Optional[str], attr: Dict[str, str], output_format: str):
     try:
         with NfsConnection.connect(SHAREDIR_IP, SHAREDIR_MOUNT_PATH) as nfs:
             store = ArtifactStore(local_store=LOCAL_STORE, nfs=nfs)
+            artifacts = store.find_artifacts(identifier, attr)
             if output_format == 'pretty':
-                print('\n\n'.join(
-                    _format_artifact_metadata(artifact_metadata)
-                    for artifact_metadata in store.find_artifacts(identifier, attr, require_hash_no_attrs=False)
-                ))
+                print('\n\n'.join(_format_artifact_metadata(artifact_metadata) for artifact_metadata in artifacts))
             elif output_format == 'json':
-                print(json.dumps(
-                    [artifact_metadata.to_dict() for artifact_metadata in store.find_artifacts(identifier, attr, require_hash_no_attrs=False)],
-                    indent=4,
-                ))
+                print(json.dumps([artifact_metadata.to_dict() for artifact_metadata in artifacts], indent=4))
             else:
                 raise ValueError(f'Unknown output format: {output_format}')
     except (LookupError, FileNotFoundError) as e:

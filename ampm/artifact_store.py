@@ -157,11 +157,8 @@ class ArtifactStore:
 
         return ArtifactMetadata.from_dict(toml.load(metadata_path))
 
-    def find_artifacts(self, identifier: str, attributes: Dict[str, str], require_hash_no_attrs: bool):
+    def find_artifacts(self, identifier: str, attributes: Dict[str, str]):
         identifier = identifier.split(':', 1)
-        if require_hash_no_attrs and not attributes and len(identifier) != 2:
-            raise LookupError(f'If no attributes are specified then IDENTIFIER must be in the format <type>:<hash>, '
-                              f'but got: "{identifier[0]}"')
 
         if len(identifier) == 2:
             artifact_metadata = self.get_metadata_by_type_hash(identifier[0], identifier[1])
@@ -169,10 +166,9 @@ class ArtifactStore:
         else:
             yield from self.get_metadata_by_attributes(identifier[0], attributes)
 
-    def get_artifact_by_type_hash(self, artifact_type: str, artifact_hash: str) -> Path:
-        artifact_metadata = self.get_metadata_by_type_hash(artifact_type, artifact_hash)
+    def get_artifact_by_metadata(self, artifact_metadata: ArtifactMetadata) -> Path:
         assert artifact_metadata.path_type in ('file', 'dir'), 'Downloading compressed artifacts not supported yet'
-        artifact_path = self._artifact_path(artifact_type, artifact_hash)
+        artifact_path = self._artifact_path(artifact_metadata.type, artifact_metadata.hash)
 
         if not artifact_path.exists():
             # print('Downloading artifact')
@@ -182,10 +178,10 @@ class ArtifactStore:
                 remote_artifact_path = artifact_metadata.path_location
             else:
                 remote_artifact_path = self._remote_artifact_path(
-                    artifact_type, artifact_hash, artifact_suffix
+                    artifact_metadata.type, artifact_metadata.hash, artifact_suffix
                 ) + '/' + artifact_metadata.name
 
-            tmp_artifact_path = self._artifact_path(artifact_type, artifact_hash, suffix='.tmp')
+            tmp_artifact_path = self._artifact_path(artifact_metadata.type, artifact_metadata.hash, suffix='.tmp')
             tmp_artifact_path.mkdir(parents=True, exist_ok=True)
 
             if artifact_metadata.path_type == 'file':
@@ -196,6 +192,10 @@ class ArtifactStore:
             tmp_artifact_path.rename(artifact_path)
 
         return artifact_path / artifact_metadata.name
+
+    def get_artifact_by_type_hash(self, artifact_type: str, artifact_hash: str) -> Path:
+        artifact_metadata = self.get_metadata_by_type_hash(artifact_type, artifact_hash)
+        return self.get_artifact_by_metadata(artifact_metadata)
 
     def upload_artifact(self, metadata: ArtifactMetadata, local_path: Optional[Path]):
         assert metadata.path_type in ARTIFACT_TYPES, f'Invalid artifact path type: {metadata.path_type}'

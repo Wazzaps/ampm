@@ -40,6 +40,9 @@ ampm get foobar:mbf5qxqli76zx7btc5n7fkq47tjs6cl2
 # Types can contain slashes, they make dirs in artifact folders
 ampm get foo/bar:7tew33maphcutgbfqui3cxnddus56isk
 
+# Selects artifact by attribute (will fail if not unique)
+ampm get foobar -a arch=x86_64
+
 # List all artifacts with type
 ampm list foobar
 
@@ -47,7 +50,7 @@ ampm list foobar
 ampm list foo
 
 # List all artifacts with type that match attributes
-ampm list foo -a some_attr=some_value
+ampm list foobar -a some_attr=some_value
 ```
 
 ## TODO:
@@ -61,9 +64,6 @@ ampm upload foobar/ --type='foobar'
 
 # Custom NFS server
 ampm --server='1.2.3.4:/foo/bar' get foobar:mbf5qxqli76zx7btc5n7fkq47tjs6cl2
-
-# Selects artifact by attribute (will fail if not unique)
-ampm get foobar -a arch=x86_64
 
 # Same but gets newest version if it's the only non-unique attribute
 ampm get foobar -a arch=x86_64 -a version=@semver:^1.0
