@@ -1,53 +1,73 @@
-# downloader
+# ampm: Artifact Manager, (not a) Package Manager
+
+## Building:
+
+### With docker:
+
+```shell
+sudo docker build -t ampm_build $PWD
+sudo docker run --rm -it -v $PWD:/code ampm_build
+ls -l ./dist/ampm
+```
+
+### Without docker:
+
+Install dependencies as needed:
+
+```shell
+python3 ./vendor/PyInstaller/__main__.py --onefile --clean --noconfirm --name=ampm ampm/cli.py
+ls -l ./dist/ampm
+```
 
 ## Implemented:
 
 ```shell
 # Upload file to default location
-downloader upload foobar.txt --type='foobar' --compressed=false
+ampm upload foobar.txt --type='foobar' --uncompressed -a some_attr=some_value -e SOME_ENV=some_value
 
 # Upload directory to default location
-downloader upload foobar/ --type='foobar' --compressed=false
+ampm upload foobar/ --type='foobar' --uncompressed
 
 # Upload to custom location
-downloader upload foobar.txt --type='foobar' --remote-path='/foobar.txt' --compressed=false
+ampm upload foobar.txt --type='foobar' --remote-path='/foobar.txt' --uncompressed
 
 # Upload to custom location manually then register artifact
-cp foobar.txt /mnt/myshareddir/foobar.txt && downloader upload --type='foobar' --name='foobar.txt' --remote-path='/foobar.txt'
+cp foobar.txt /mnt/myshareddir/foobar.txt && ampm upload --type='foobar' --name='foobar.txt' --remote-path='/foobar.txt'
 
 # Download artifact by type and hash
-downloader get foobar:mbf5qxqli76zx7btc5n7fkq47tjs6cl2
+ampm get foobar:mbf5qxqli76zx7btc5n7fkq47tjs6cl2
 
 # Types can contain slashes, they make dirs in artifact folders
-downloader get foo/bar:7tew33maphcutgbfqui3cxnddus56isk
+ampm get foo/bar:7tew33maphcutgbfqui3cxnddus56isk
 ```
 
 ## TODO:
 
 ```shell
 # Upload file to default location, gz compression
-downloader upload foobar.txt --type='foobar'
+ampm upload foobar.txt --type='foobar'
 
 # Upload file to default location, in tar.gz archive
-downloader upload foobar/ --type='foobar'
+ampm upload foobar/ --type='foobar'
 
 # Custom NFS server
-downloader --server='1.2.3.4:/foo/bar' get foobar:mbf5qxqli76zx7btc5n7fkq47tjs6cl2
+ampm --server='1.2.3.4:/foo/bar' get foobar:mbf5qxqli76zx7btc5n7fkq47tjs6cl2
 
 # List all artifacts with type
-downloader list foobar
+ampm list foobar
 
 # List all subtypes (assuming foo/bar exists, etc.)
-downloader list foo
+ampm list foo
 
 # Selects artifact by attribute (will fail if not unique)
-downloader get foobar -- --arch=x86_64
+ampm get foobar -a arch=x86_64
 
 # Same but gets newest version if it's the only non-unique attribute
-downloader get foobar -- --arch=x86_64 --version=@semver:^1.0
+ampm get foobar -a arch=x86_64 -a version=@semver:^1.0
+ampm get foobar -a arch=x86_64 -a pubdate=@date:latest
 
 # Prints a bash script that can be sourced to export the artifact's env vars
-downloader env foobar:mbf5qxqli76zx7btc5n7fkq47tjs6cl2
+ampm env foobar:mbf5qxqli76zx7btc5n7fkq47tjs6cl2
 ```
 
 - Make `get` not connect to NFS if it exists locally

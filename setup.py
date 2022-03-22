@@ -1,13 +1,12 @@
 from setuptools import setup
 
 setup(
-    name='downloader',
+    name='ampm',
     version='1.0.0',
-    packages=['downloader'],
+    packages=['ampm'],
     url='',
-    license='',
+    license='MIT',
     author='baba',
     author_email='',
-    description='downloader',
-    requires=["pyNfsClient", "tqdm", "click", "toml"]
+    description='Artifact Manager, (not a) Package Manager',
 )
