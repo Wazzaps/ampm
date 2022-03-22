@@ -94,7 +94,7 @@ class ArtifactStore:
 
     def _metadata_path(self, artifact_type: str, artifact_hash: str, suffix: str = '') -> Path:
         assert len(artifact_hash) == 32, f'Invalid artifact hash: {artifact_hash}'
-        return self._metadata_dir(artifact_type) / (artifact_hash.lower() + '.toml' + suffix)
+        return self._metadata_dir(artifact_type) / (artifact_hash.lower() + suffix)
 
     # TODO: Maybe don't add name for dirs?
     @staticmethod
@@ -119,10 +119,10 @@ class ArtifactStore:
                 if matches:
                     type_extra = matches.group(1)
                     artifact_hash = matches.group(2)
-                    tmp_metadata_path = self._metadata_path(artifact_type + type_extra, artifact_hash, '.tmp')
+                    tmp_metadata_path = self._metadata_path(artifact_type + type_extra, artifact_hash, '.toml.tmp')
                     tmp_metadata_path.parent.mkdir(parents=True, exist_ok=True)
                     self.nfs.download(tmp_metadata_path, self._remote_metadata_path(artifact_type + type_extra, artifact_hash))
-                    tmp_metadata_path.rename(self._metadata_path(artifact_type + type_extra, artifact_hash))
+                    tmp_metadata_path.rename(self._metadata_path(artifact_type + type_extra, artifact_hash, '.toml'))
         except IOError:
             raise FileNotFoundError(f'Artifact type not found: {artifact_type}')
 
@@ -135,6 +135,7 @@ class ArtifactStore:
         for artifact_metadata in self._load_metadata_by_type(artifact_type):
             for attr in attributes:
                 if attributes[attr].startswith('@'):
+                    # TODO: Attribute filters
                     raise NotImplementedError('Attribute filters not supported yet')
 
                 if attr not in artifact_metadata.attributes or attributes[attr] != artifact_metadata.attributes[attr]:
@@ -143,19 +144,28 @@ class ArtifactStore:
                 yield artifact_metadata
 
     def get_metadata_by_type_hash(self, artifact_type: str, artifact_hash: str) -> ArtifactMetadata:
-        metadata_path = self._metadata_path(artifact_type, artifact_hash)
+        metadata_path = self._metadata_path(artifact_type, artifact_hash, '.toml')
+        metadata = None
 
         if not metadata_path.exists():
             # print('Downloading metadata')
-            tmp_metadata_path = self._metadata_path(artifact_type, artifact_hash, '.tmp')
+            tmp_metadata_path = self._metadata_path(artifact_type, artifact_hash, '.toml.tmp')
             tmp_metadata_path.parent.mkdir(parents=True, exist_ok=True)
             try:
                 self.nfs.download(tmp_metadata_path, self._remote_metadata_path(artifact_type, artifact_hash))
             except IOError:
                 raise FileNotFoundError(f'Artifact not found: {artifact_type}:{artifact_hash}')
+
+            metadata = ArtifactMetadata.from_dict(toml.load(metadata_path))
+            self._metadata_path(artifact_type, artifact_hash, '.env').write_text(
+                '\n'.join(f'export {k}={v}' for k, v in metadata.env.items())
+            )
+            self._metadata_path(artifact_type, artifact_hash, '.target').symlink_to(
+                self._get_artifact_target(metadata)
+            )
             tmp_metadata_path.rename(metadata_path)
 
-        return ArtifactMetadata.from_dict(toml.load(metadata_path))
+        return metadata or ArtifactMetadata.from_dict(toml.load(metadata_path))
 
     def find_artifacts(self, identifier: str, attributes: Dict[str, str]):
         identifier = identifier.split(':', 1)
@@ -188,6 +198,13 @@ class ArtifactStore:
                 self.nfs.download(tmp_artifact_path / artifact_metadata.name, remote_artifact_path, progress_bar=True)
             elif artifact_metadata.path_type == 'dir':
                 tmp_artifact_path.mkdir(parents=True, exist_ok=True)
+
+            self._metadata_path(artifact_metadata.type, artifact_metadata.hash, '.env').write_text(
+                '\n'.join(f'export {k}={v}' for k, v in artifact_metadata.env.items())
+            )
+            self._metadata_path(artifact_metadata.type, artifact_metadata.hash, '.target').symlink_to(
+                artifact_path / artifact_metadata.name
+            )
 
             tmp_artifact_path.rename(artifact_path)
 
