@@ -16,6 +16,8 @@ Install dependencies as needed:
 
 ```shell
 python3 ./vendor/PyInstaller/__main__.py --onefile --clean --noconfirm --name=ampm ampm/cli.py
+mv ./dist/ampm/ampm ./dist/ampm/ampm_py
+cp ./ampm/ampm.sh ./dist/ampm/ampm
 ls -l ./dist/ampm
 ```
 
