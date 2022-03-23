@@ -51,6 +51,9 @@ ampm list foo
 
 # List all artifacts with type that match attributes
 ampm list foobar -a some_attr=some_value
+
+# Prints a shell script that can be sourced to export the artifact's env vars
+ampm env foobar:mbf5qxqli76zx7btc5n7fkq47tjs6cl2
 ```
 
 ## TODO:
@@ -68,9 +71,6 @@ ampm --server='1.2.3.4:/foo/bar' get foobar:mbf5qxqli76zx7btc5n7fkq47tjs6cl2
 # Same but gets newest version if it's the only non-unique attribute
 ampm get foobar -a arch=x86_64 -a version=@semver:^1.0
 ampm get foobar -a arch=x86_64 -a pubdate=@date:latest
-
-# Prints a bash script that can be sourced to export the artifact's env vars
-ampm env foobar:mbf5qxqli76zx7btc5n7fkq47tjs6cl2
 ```
 
 - Make `get` not connect to NFS if it exists locally

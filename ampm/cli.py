@@ -247,7 +247,7 @@ def env(identifier: str, attr: Dict[str, str]):
                     '\n\n'.join(_format_artifact_metadata(artifact_metadata) for artifact_metadata in artifacts)
                 )
             store.get_artifact_by_metadata(artifacts[0])
-            print('\n'.join(f'export {k}={v}' for k, v in artifacts[0].env.items()))
+            print(store.format_env_file(artifacts[0]))
     except (LookupError, FileNotFoundError) as e:
         print(' '.join(e.args), file=sys.stderr)
         sys.exit(1)

@@ -3,6 +3,7 @@ import dataclasses
 import datetime
 import hashlib
 import re
+import shlex
 import toml
 from pathlib import Path
 from typing import Dict, Optional, Iterable
@@ -161,9 +162,7 @@ class ArtifactStore:
                 raise FileNotFoundError(f'Artifact not found: {artifact_type}:{artifact_hash}')
 
             metadata = ArtifactMetadata.from_dict(toml.load(tmp_metadata_path))
-            self._metadata_path(artifact_type, artifact_hash, '.env').write_text(
-                '\n'.join(f'export {k}={v}' for k, v in metadata.env.items())
-            )
+            self._metadata_path(artifact_type, artifact_hash, '.env').write_text(self.format_env_file(metadata))
             target_file = self._metadata_path(artifact_type, artifact_hash, '.target')
             target_file.unlink(missing_ok=True)
             target_file.symlink_to(self._get_artifact_target(metadata))
@@ -204,7 +203,7 @@ class ArtifactStore:
                 tmp_artifact_path.mkdir(parents=True, exist_ok=True)
 
             self._metadata_path(artifact_metadata.type, artifact_metadata.hash, '.env').write_text(
-                '\n'.join(f'export {k}={v}' for k, v in artifact_metadata.env.items())
+                self.format_env_file(artifact_metadata)
             )
             target_file = self._metadata_path(artifact_metadata.type, artifact_metadata.hash, '.target')
             target_file.unlink(missing_ok=True)
@@ -237,3 +236,10 @@ class ArtifactStore:
         self.nfs.rename(tmp_remote_metadata_path, remote_metadata_path)
 
         return f'{metadata.type}:{metadata.hash}'
+
+    def format_env_file(self, metadata: ArtifactMetadata) -> str:
+        base_dir = self._artifact_path(metadata.type, metadata.hash)
+        return '\n'.join(
+            f'export {shlex.quote(k)}={shlex.quote(v.replace("${BASE_DIR}", str(base_dir)))}'
+            for k, v in metadata.env.items()
+        )
