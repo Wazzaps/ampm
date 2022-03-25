@@ -132,6 +132,7 @@ class RPC(object):
     def connect(self, server_has_port_security=False, max_bind_tries=500):
         self.client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.client.settimeout(self.timeout)
+        self.client.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         # if we are running as root, use a source port between 500 and 1024 (NFS security options...)
         random_port = None
         try:

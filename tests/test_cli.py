@@ -1,4 +1,5 @@
 import re
+import time
 import ampm.cli
 # noinspection PyUnresolvedReferences
 from utils import *
@@ -78,3 +79,24 @@ def test_download_single_file_uncompressed_location(clean_repos):
     artifact_hash = upload('tests/dummy_data/foobar.txt', artifact_type='foo', remote_path='/custom_dir/foobar.txt')
     artifact_path = download(f'foo:{artifact_hash}', {})
     assert artifact_path.read_bytes() == b"foo bar\n", "Downloaded file has wrong contents"
+
+
+def test_stress(clean_repos):
+    _ = clean_repos
+    artifact_hashes = []
+
+    COUNT = 200
+
+    t = time.time()
+    for i in range(COUNT):
+        artifact_hashes.append(upload('tests/dummy_data/foobar.txt', artifact_type='foo'))
+    upload_duration = time.time() - t
+    print(f'Uploaded {COUNT} artifacts in {upload_duration} seconds')
+    assert upload_duration < 10, f"Uploading {COUNT} artifacts took too long"
+
+    t = time.time()
+    for artifact_hash in artifact_hashes:
+        download(f'foo:{artifact_hash}', {})
+    download_duration = time.time() - t
+    print(f'Downloaded {COUNT} artifacts in {download_duration} seconds')
+    assert download_duration < 5, f"Downloading {COUNT} artifacts took too long"

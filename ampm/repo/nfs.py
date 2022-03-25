@@ -184,7 +184,6 @@ class NfsConnection:
         link_path = self._splitpath(remote_path)
         fh, _attrs = self._open(link_path)
         readlink_res = self.nfs3.readlink(fh)
-        print(readlink_res)
 
         if readlink_res["status"] != NFS3_OK:
             raise IOError(f"NFS readlink failed: code={readlink_res['status']} ({NFSSTAT3[readlink_res['status']]})")
@@ -431,8 +430,7 @@ class NfsRepo(ArtifactRepo):
         except ConnectionError:
             raise
         except IOError as e:
-            print(e)
-            raise FileNotFoundError(f'Artifact type not found: {artifact_type}')
+            pass
 
     def hash_remote_file(self, remote_path: str, progress_bar=False) -> str:
         with self._connected() as nfs:

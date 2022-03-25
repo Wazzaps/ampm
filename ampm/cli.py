@@ -1,19 +1,42 @@
+import collections
 import contextlib
 import datetime
 import hashlib
 import json
+import os
 import sys
 from pathlib import Path
 
 import click
 import colorama
-from typing import Tuple, Optional, Dict
+from typing import Tuple, Optional, Dict, Mapping
 
 from ampm.repo.base import ArtifactQuery, AmbiguousQueryError, RepoGroup, QueryNotFoundError, \
     ArtifactMetadata, ArtifactRepo, REMOTE_REPO_URI
 from ampm.repo.local import LOCAL_REPO
 
-cli = click.Group()
+
+class OrderedGroup(click.Group):
+    def __init__(self, name: Optional[str] = None, commands: Optional[Mapping[str, click.Command]] = None, **kwargs):
+        super(OrderedGroup, self).__init__(name, commands, **kwargs)
+        # the registered subcommands by their exported names.
+        self.commands = commands or collections.OrderedDict()
+
+    def list_commands(self, ctx: click.Context) -> Mapping[str, click.Command]:
+        return self.commands
+
+
+@click.group(cls=OrderedGroup)
+@click.option('-s', '--server', help=f'Remote repository server (default: {REMOTE_REPO_URI})')
+@click.pass_context
+def cli(ctx: click.Context, server: Optional[str]):
+    ctx.ensure_object(dict)
+    if server is not None:
+        ctx.obj['server'] = server
+    elif 'AMPM_SERVER' in os.environ:
+        ctx.obj['server'] = os.environ['AMPM_SERVER']
+    else:
+        ctx.obj['server'] = REMOTE_REPO_URI
 
 
 def _parse_dict(_ctx, _param, value: Tuple[str]):
@@ -46,7 +69,7 @@ def handle_common_errors():
               f'Please run `sudo mkdir {local_repo_path} && sudo chmod 777 {local_repo_path}`.', file=sys.stderr)
         sys.exit(1)
     except ConnectionError as e:
-        print(f'Remote repo cannot be contacted: {" ".join(str(a) for a in e.args)}')
+        print(f'Remote repo cannot be contacted: {" ".join(str(a) for a in e.args)}', file=sys.stderr)
         sys.exit(1)
 
 
@@ -86,15 +109,16 @@ def _format_artifact_metadata(artifact_metadata: ArtifactMetadata) -> str:
     required=True
 )
 @click.option('-a', '--attr', help='Artifact attributes', multiple=True, callback=_parse_dict)
-def get(identifier: str, attr: Dict[str, str]):
+@click.pass_context
+def get(ctx: click.Context, identifier: str, attr: Dict[str, str]):
     """
-        Fetch artifact from artifact storage, then print its local path
+        Fetch artifact, then print its local path
 
         IDENTIFIER is in the format <type>:<hash>, e.g.: foobar:mbf5qxqli76zx7btc5n7fkq47tjs6cl2
     """
 
     with handle_common_errors():
-        repos = RepoGroup()
+        repos = RepoGroup(remote_uri=ctx.obj['server'])
         query = ArtifactQuery(identifier, attr)
 
         local_path, _metadata = repos.get_single(query)
@@ -103,10 +127,7 @@ def get(identifier: str, attr: Dict[str, str]):
 
 
 @cli.command(name='list')
-@click.argument(
-    'IDENTIFIER',
-    required=True
-)
+@click.argument('IDENTIFIER', required=False)
 @click.option('-a', '--attr', help='Artifact attributes', multiple=True, callback=_parse_dict)
 @click.option(
     '-f', '--format', 'output_format',
@@ -114,7 +135,8 @@ def get(identifier: str, attr: Dict[str, str]):
     help='Output format',
     default='pretty',
 )
-def list_(identifier: Optional[str], attr: Dict[str, str], output_format: str):
+@click.pass_context
+def list_(ctx: click.Context, identifier: Optional[str], attr: Dict[str, str], output_format: str):
     """
         Get info about artifacts
 
@@ -125,8 +147,8 @@ def list_(identifier: Optional[str], attr: Dict[str, str], output_format: str):
     """
 
     with handle_common_errors():
-        repos = RepoGroup()
-        query = ArtifactQuery(identifier, attr)
+        repos = RepoGroup(remote_uri=ctx.obj['server'])
+        query = ArtifactQuery(identifier or '', attr)
 
         if query.is_exact:
             artifacts = [repos.lookup_single(query)]
@@ -148,15 +170,16 @@ def list_(identifier: Optional[str], attr: Dict[str, str], output_format: str):
     required=True
 )
 @click.option('-a', '--attr', help='Artifact attributes', multiple=True, callback=_parse_dict)
-def env(identifier: str, attr: Dict[str, str]):
+@click.pass_context
+def env(ctx: click.Context, identifier: str, attr: Dict[str, str]):
     """
-        Fetch artifact from artifact storage, then print its environment variables
+        Fetch artifact, then print its environment variables
 
         IDENTIFIER is in the format <type>:<hash>, e.g.: foobar:mbf5qxqli76zx7btc5n7fkq47tjs6cl2
     """
 
     with handle_common_errors():
-        repos = RepoGroup()
+        repos = RepoGroup(remote_uri=ctx.obj['server'])
         query = ArtifactQuery(identifier, attr)
 
         _local_path, metadata = repos.get_single(query)
@@ -184,13 +207,9 @@ def env(identifier: str, attr: Dict[str, str]):
 )
 @click.option('-a', '--attr', help='Artifact attributes', multiple=True, callback=_parse_dict)
 @click.option('-e', '--env', help='Artifact environment vars', multiple=True, callback=_parse_dict)
-@click.option(
-    '--remote-repo',
-    help='Repository to store artifact in',
-    default=REMOTE_REPO_URI,
-    show_default=True
-)
+@click.pass_context
 def upload(
+        ctx: click.Context,
         local_path: Optional[Path],
         type: str,
         name: Optional[str],
@@ -199,7 +218,6 @@ def upload(
         remote_path: Optional[str],
         attr: Dict[str, str],
         env: Dict[str, str],
-        remote_repo: str,
 ):
     """
         Upload artifact to artifact storage.
@@ -211,7 +229,7 @@ def upload(
     if local_path is None and remote_path is None:
         raise click.BadParameter('Must specify either LOCAL_PATH or --remote-path')
 
-    remote_repo = ArtifactRepo.by_uri(remote_repo)
+    remote_repo = ArtifactRepo.by_uri(ctx.obj['server'])
 
     if local_path is not None:
         name = name or local_path.name
@@ -257,7 +275,8 @@ def upload(
 
 @cli.command()
 @click.option('--remote', is_flag=True, default=False, help='Garbage collect on remote storage instead')
-def gc(remote: bool):
+@click.pass_context
+def gc(ctx: click.Context, remote: bool):
     raise NotImplementedError()
 
 

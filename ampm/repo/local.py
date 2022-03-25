@@ -60,7 +60,7 @@ class LocalRepo(ArtifactRepo):
         return ArtifactMetadata.from_dict(toml.load(self.metadata_path_of(artifact_type, artifact_hash)))
 
     def metadata_path_of(self, artifact_type: str, artifact_hash: Optional[str], suffix='.toml') -> Path:
-        return self.path / 'metadata' / artifact_type / ((artifact_hash or '') + suffix)
+        return self.path / 'metadata' / artifact_type.strip('/') / ((artifact_hash or '') + suffix)
 
     def artifact_base_path_of(self, metadata: ArtifactMetadata, suffix='') -> Path:
         return self.path / 'artifacts' / metadata.type.lower() / (metadata.hash.lower() + suffix)

@@ -118,6 +118,8 @@ class ArtifactQuery:
 class ArtifactRepo:
     @staticmethod
     def by_uri(uri: str) -> "ArtifactRepo":
+        assert '://' in uri, f'Server URI must be in the format `protocol://host/path`, ' \
+                             f'e.g. `nfs://localhost/`, but got: {uri}'
         protocol, rest = uri.split("://", 1)
 
         if protocol == "file":
@@ -161,13 +163,13 @@ class QueryNotFoundError(Exception):
 
 
 class RepoGroup:
-    def __init__(self, repos: Optional[List[ArtifactRepo]] = None):
+    def __init__(self, repos: Optional[List[ArtifactRepo]] = None, remote_uri: str = None):
         if repos is None:
             from ampm.repo.local import LOCAL_REPO
-            repos = [
-                LOCAL_REPO,
-                ArtifactRepo.by_uri(REMOTE_REPO_URI)
-            ]
+
+            repos = [LOCAL_REPO]
+            if remote_uri:
+                repos.append(ArtifactRepo.by_uri(remote_uri))
 
         self.repos = repos
 

@@ -54,6 +54,12 @@ ampm list foo
 # List all artifacts with type that match attributes
 ampm list foobar -a some_attr=some_value
 
+# List all artifacts
+ampm list
+
+# List all artifacts with json output
+ampm list foobar --format=json
+
 # Prints a shell script that can be sourced to export the artifact's env vars
 ampm env foobar:mbf5qxqli76zx7btc5n7fkq47tjs6cl2
 ```
