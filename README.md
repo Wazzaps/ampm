@@ -62,6 +62,9 @@ ampm list foobar --format=json
 
 # Prints a shell script that can be sourced to export the artifact's env vars
 ampm env foobar:mbf5qxqli76zx7btc5n7fkq47tjs6cl2
+
+# Custom NFS server
+ampm --server='nfs://1.2.3.4/some/repo' get foobar:mbf5qxqli76zx7btc5n7fkq47tjs6cl2
 ```
 
 ## TODO:
@@ -73,16 +76,10 @@ ampm upload foobar.txt --type='foobar'
 # Upload file to default location, in tar.gz archive
 ampm upload foobar/ --type='foobar'
 
-# Custom NFS server
-ampm --server='1.2.3.4:/foo/bar' get foobar:mbf5qxqli76zx7btc5n7fkq47tjs6cl2
-
 # Same but gets newest version if it's the only non-unique attribute
 ampm get foobar -a arch=x86_64 -a version=@semver:^1.0
 ampm get foobar -a arch=x86_64 -a pubdate=@date:latest
 ```
-
-- Make `get` not connect to NFS if it exists locally
-- Maybe not add `name` field as directory name if `path_type` is `dir`
 
 ## Hash calculation algorithm
 
