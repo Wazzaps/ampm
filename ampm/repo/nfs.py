@@ -427,7 +427,7 @@ class NfsRepo(ArtifactRepo):
                         tmp_local_path.parent.mkdir(parents=True, exist_ok=True)
                         nfs.download(tmp_local_path, self.metadata_path_of(artifact_type + type_extra, artifact_hash))
                         tmp_local_path.rename(local_path)
-        except ConnectionError:
+        except (ConnectionError, PermissionError):
             raise
         except IOError as e:
             pass
