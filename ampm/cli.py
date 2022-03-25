@@ -1,18 +1,17 @@
+import contextlib
 import datetime
 import hashlib
 import json
 import sys
+from pathlib import Path
+
 import click
 import colorama
-from pathlib import Path
 from typing import Tuple, Optional, Dict
-from ampm.artifact_store import ArtifactStore, ArtifactMetadata
-from ampm.nfs import NfsConnection
 
-LOCAL_STORE = Path('/var/ampm')
-
-SHAREDIR_MOUNT_PATH = '/mnt/myshareddir'
-SHAREDIR_IP = '127.0.0.1'
+from ampm.repo.base import ArtifactQuery, AmbiguousQueryError, RepoGroup, QueryNotFoundError, \
+    ArtifactMetadata, ArtifactRepo, REMOTE_REPO_URI
+from ampm.repo.local import LOCAL_REPO
 
 cli = click.Group()
 
@@ -27,130 +26,32 @@ def _parse_dict(_ctx, _param, value: Tuple[str]):
     return result
 
 
-@cli.command()
-@click.argument(
-    'LOCAL_PATH',
-    type=click.Path(exists=True, path_type=Path),
-    required=False
-)
-@click.option('--type', help='Artifact type', required=True)
-@click.option('--name', help='Override artifact name (default: same as filename)')
-@click.option('--description', help='Set artifact description (default: empty string)')
-@click.option(
-    '--compressed/--uncompressed',
-    default=True,
-    help='Store artifact in compressed format (.tar.gz or .gz) (default: compressed)'
-)
-@click.option(
-    '--remote-path',
-    help='Store artifact in specified location (default: /<type>/<hash>)',
-)
-@click.option('-a', '--attr', help='Artifact attributes', multiple=True, callback=_parse_dict)
-@click.option('-e', '--env', help='Artifact environment vars', multiple=True, callback=_parse_dict)
-def upload(
-        local_path: Optional[Path],
-        type: str,
-        name: Optional[str],
-        description: Optional[str],
-        compressed: bool,
-        remote_path: Optional[str],
-        attr: Dict[str, str],
-        env: Dict[str, str]
-):
-    """
-        Upload artifact to artifact storage.
-
-        If LOCAL_PATH is unspecified, assume already it's uploaded to value of `--remote-path`
-    """
-    assert not compressed, 'Compressed uploads are not supported yet'
-
-    if local_path is None and name is None:
-        raise click.BadParameter('If LOCAL_PATH is missing then --name must be specified')
-    if local_path is None and remote_path is None:
-        raise click.BadParameter('Must specify either LOCAL_PATH or --remote-path')
-
-    with NfsConnection.connect(SHAREDIR_IP, SHAREDIR_MOUNT_PATH) as nfs:
-        if local_path is not None:
-            if local_path.is_dir():
-                artifact_hash = None
-                if compressed:
-                    artifact_type = 'tar.gz'
-                else:
-                    artifact_type = 'dir'
-            elif local_path.is_file():
-                artifact_hash = hashlib.sha256(local_path.read_bytes()).hexdigest()
-                if compressed:
-                    artifact_type = 'gz'
-                else:
-                    artifact_type = 'file'
-            else:
-                raise click.BadParameter(f'Unsupported file type: {local_path} ({local_path.stat().st_type})')
-        else:
-            # Get hash of remote file
-            hasher = hashlib.sha256(b'')
-            for chunk in nfs.read_stream(remote_path, progress_bar=True):
-                hasher.update(chunk)
-            artifact_hash = hasher.hexdigest()
-
-        meta = ArtifactMetadata(
-            name=name or local_path.name,
-            description=description or '',
-            pubdate=datetime.datetime.now(tz=datetime.timezone.utc),
-            type=type,
-            attributes=attr,
-            env=env,
-            path_type=artifact_type,
-            path_hash=artifact_hash,
-            path_location=remote_path,
-        )
-        store = ArtifactStore(local_store=LOCAL_STORE, nfs=nfs)
-        print(store.upload_artifact(meta, local_path))
-
-
-@cli.command()
-@click.argument(
-    'IDENTIFIER',
-    required=True
-)
-@click.option('-a', '--attr', help='Artifact attributes', multiple=True, callback=_parse_dict)
-def get(identifier: str, attr: Dict[str, str]):
-    """
-        Fetch artifact from artifact storage.
-
-        IDENTIFIER is in the format <type>:<hash>, e.g.: foobar:mbf5qxqli76zx7btc5n7fkq47tjs6cl2
-    """
-
-    # TODO: Don't connect to NFS every time
+@contextlib.contextmanager
+def handle_common_errors():
     try:
-        with NfsConnection.connect(SHAREDIR_IP, SHAREDIR_MOUNT_PATH) as nfs:
-            store = ArtifactStore(local_store=LOCAL_STORE, nfs=nfs)
-            artifacts = list(store.find_artifacts(identifier, attr))
-            if len(artifacts) == 0:
-                raise FileNotFoundError(f'Artifact not found: {identifier}')
-            elif len(artifacts) > 1:
-                raise LookupError(
-                    f'Ambiguous artifact identifier: {identifier}, found multiple options:\n' +
-                    '\n\n'.join(_format_artifact_metadata(artifact_metadata) for artifact_metadata in artifacts)
-                )
-            print(store.get_artifact_by_metadata(artifacts[0]))
-    except (LookupError, FileNotFoundError) as e:
-        print(' '.join(e.args), file=sys.stderr)
+        yield
+    except AmbiguousQueryError as e:
+        print(
+            f'Ambiguous artifact query: {e.query}, found multiple options:\n' +
+            '\n\n'.join(_format_artifact_metadata(artifact_metadata) for artifact_metadata in e.options),
+            file=sys.stderr
+        )
+        sys.exit(1)
+    except QueryNotFoundError as e:
+        print(f'Artifact not found matching query: {e.query}', file=sys.stderr)
         sys.exit(1)
     except PermissionError:
-        print(f'The local artifact store ({str(LOCAL_STORE)}) doesn\'t exist and you\'re not root. '
-              f'Please run `sudo mkdir /var/ampm && sudo chmod 777 /var/ampm`.', file=sys.stderr)
+        local_repo_path = str(LOCAL_REPO.path)
+        print(f'The local artifact store ({local_repo_path}) doesn\'t exist and you\'re not root. '
+              f'Please run `sudo mkdir {local_repo_path} && sudo chmod 777 {local_repo_path}`.', file=sys.stderr)
+        sys.exit(1)
+    except ConnectionError as e:
+        print(f'Remote repo cannot be contacted: {" ".join(str(a) for a in e.args)}')
         sys.exit(1)
 
 
 def _format_artifact_metadata(artifact_metadata: ArtifactMetadata) -> str:
-    combined_attrs = {
-        'name': artifact_metadata.name,
-        'description': artifact_metadata.description,
-        'pubdate': artifact_metadata.pubdate.isoformat(sep=' '),
-    }
-    if artifact_metadata.path_location:
-        combined_attrs['location'] = artifact_metadata.path_location
-    combined_attrs.update(artifact_metadata.attributes)
+    combined_attrs = artifact_metadata.combined_attrs
 
     INDENT = 4
     SPACER = ', '
@@ -179,6 +80,28 @@ def _format_artifact_metadata(artifact_metadata: ArtifactMetadata) -> str:
            f'\n{combined_attrs}'
 
 
+@cli.command()
+@click.argument(
+    'IDENTIFIER',
+    required=True
+)
+@click.option('-a', '--attr', help='Artifact attributes', multiple=True, callback=_parse_dict)
+def get(identifier: str, attr: Dict[str, str]):
+    """
+        Fetch artifact from artifact storage, then print its local path
+
+        IDENTIFIER is in the format <type>:<hash>, e.g.: foobar:mbf5qxqli76zx7btc5n7fkq47tjs6cl2
+    """
+
+    with handle_common_errors():
+        repos = RepoGroup()
+        query = ArtifactQuery(identifier, attr)
+
+        local_path, _metadata = repos.get_single(query)
+
+        print(local_path)
+
+
 @cli.command(name='list')
 @click.argument(
     'IDENTIFIER',
@@ -201,24 +124,22 @@ def list_(identifier: Optional[str], attr: Dict[str, str], output_format: str):
         You may specify attributes to filter down the results
     """
 
-    # TODO: Don't connect to NFS every time
-    try:
-        with NfsConnection.connect(SHAREDIR_IP, SHAREDIR_MOUNT_PATH) as nfs:
-            store = ArtifactStore(local_store=LOCAL_STORE, nfs=nfs)
-            artifacts = store.find_artifacts(identifier, attr)
-            if output_format == 'pretty':
-                print('\n\n'.join(_format_artifact_metadata(artifact_metadata) for artifact_metadata in artifacts))
-            elif output_format == 'json':
-                print(json.dumps([artifact_metadata.to_dict() for artifact_metadata in artifacts], indent=4))
-            else:
-                raise ValueError(f'Unknown output format: {output_format}')
-    except (LookupError, FileNotFoundError) as e:
-        print(' '.join(e.args), file=sys.stderr)
-        sys.exit(1)
-    except PermissionError:
-        print(f'The local artifact store ({str(LOCAL_STORE)}) doesn\'t exist and you\'re not root. '
-              f'Please run `sudo mkdir /var/ampm && sudo chmod 777 /var/ampm`.', file=sys.stderr)
-        sys.exit(1)
+    with handle_common_errors():
+        repos = RepoGroup()
+        query = ArtifactQuery(identifier, attr)
+
+        if query.is_exact:
+            artifacts = [repos.lookup_single(query)]
+        else:
+            repos.download_metadata_for_type(query.type)
+            artifacts = list(LOCAL_REPO.lookup(query))
+
+        if output_format == 'pretty':
+            print('\n\n'.join(_format_artifact_metadata(artifact_metadata) for artifact_metadata in artifacts))
+        elif output_format == 'json':
+            print(json.dumps([artifact_metadata.to_dict() for artifact_metadata in artifacts], indent=4))
+        else:
+            raise ValueError(f'Unknown output format: {output_format}')
 
 
 @cli.command()
@@ -234,27 +155,104 @@ def env(identifier: str, attr: Dict[str, str]):
         IDENTIFIER is in the format <type>:<hash>, e.g.: foobar:mbf5qxqli76zx7btc5n7fkq47tjs6cl2
     """
 
-    # TODO: Don't connect to NFS every time
-    try:
-        with NfsConnection.connect(SHAREDIR_IP, SHAREDIR_MOUNT_PATH) as nfs:
-            store = ArtifactStore(local_store=LOCAL_STORE, nfs=nfs)
-            artifacts = list(store.find_artifacts(identifier, attr))
-            if len(artifacts) == 0:
-                raise FileNotFoundError(f'Artifact not found: {identifier}')
-            elif len(artifacts) > 1:
-                raise LookupError(
-                    f'Ambiguous artifact identifier: {identifier}, found multiple options:\n' +
-                    '\n\n'.join(_format_artifact_metadata(artifact_metadata) for artifact_metadata in artifacts)
-                )
-            store.get_artifact_by_metadata(artifacts[0])
-            print(store.format_env_file(artifacts[0]))
-    except (LookupError, FileNotFoundError) as e:
-        print(' '.join(e.args), file=sys.stderr)
-        sys.exit(1)
-    except PermissionError:
-        print(f'The local artifact store ({str(LOCAL_STORE)}) doesn\'t exist and you\'re not root. '
-              f'Please run `sudo mkdir /var/ampm && sudo chmod 777 /var/ampm`.', file=sys.stderr)
-        sys.exit(1)
+    with handle_common_errors():
+        repos = RepoGroup()
+        query = ArtifactQuery(identifier, attr)
+
+        _local_path, metadata = repos.get_single(query)
+
+        print(LOCAL_REPO.format_env_file(metadata))
+
+
+@cli.command()
+@click.argument(
+    'LOCAL_PATH',
+    type=click.Path(exists=True, path_type=Path),
+    required=False
+)
+@click.option('--type', help='Artifact type', required=True)
+@click.option('--name', help='Override artifact name (default: same as filename)')
+@click.option('--description', help='Set artifact description (default: empty string)')
+@click.option(
+    '--compressed/--uncompressed',
+    default=True,
+    help='Store artifact in compressed format (.tar.gz or .gz) (default: compressed)'
+)
+@click.option(
+    '--remote-path',
+    help='Store artifact in specified location (default: /<type>/<hash>)',
+)
+@click.option('-a', '--attr', help='Artifact attributes', multiple=True, callback=_parse_dict)
+@click.option('-e', '--env', help='Artifact environment vars', multiple=True, callback=_parse_dict)
+@click.option(
+    '--remote-repo',
+    help='Repository to store artifact in',
+    default=REMOTE_REPO_URI,
+    show_default=True
+)
+def upload(
+        local_path: Optional[Path],
+        type: str,
+        name: Optional[str],
+        description: Optional[str],
+        compressed: bool,
+        remote_path: Optional[str],
+        attr: Dict[str, str],
+        env: Dict[str, str],
+        remote_repo: str,
+):
+    """
+        Upload artifact to artifact storage.
+
+        If LOCAL_PATH is unspecified, assume already it's uploaded to value of `--remote-path`
+    """
+    assert not compressed, 'Compressed uploads are not supported yet'
+
+    if local_path is None and remote_path is None:
+        raise click.BadParameter('Must specify either LOCAL_PATH or --remote-path')
+
+    remote_repo = ArtifactRepo.by_uri(remote_repo)
+
+    if local_path is not None:
+        name = name or local_path.name
+        if local_path.is_dir():
+            artifact_hash = None
+            if compressed:
+                artifact_type = 'tar.gz'
+            else:
+                artifact_type = 'dir'
+        elif local_path.is_file():
+            artifact_hash = hashlib.sha256(local_path.read_bytes()).hexdigest()
+            if compressed:
+                artifact_type = 'gz'
+            else:
+                artifact_type = 'file'
+        else:
+            raise click.BadParameter(f'Unsupported file type: {local_path} ({local_path.stat().st_type})')
+    else:
+        name = name or remote_path.strip('/').split('/')[-1]
+        try:
+            artifact_type = 'file'
+            artifact_hash = remote_repo.hash_remote_file(remote_path, progress_bar=True)
+        except IsADirectoryError:
+            artifact_type = 'dir'
+            artifact_hash = None
+
+    meta = ArtifactMetadata(
+        name=name,
+        description=description or '',
+        pubdate=datetime.datetime.now(tz=datetime.timezone.utc),
+        type=type,
+        attributes=attr,
+        env=env,
+        path_type=artifact_type,
+        path_hash=artifact_hash,
+        path_location=remote_path,
+    )
+
+    remote_repo.upload(meta, local_path)
+
+    print(f'{meta.type}:{meta.hash}')
 
 
 @cli.command()

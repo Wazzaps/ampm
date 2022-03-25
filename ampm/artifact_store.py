@@ -227,7 +227,7 @@ class ArtifactStore:
             else:
                 tmp_remote_path = self._remote_artifact_path(metadata.type, metadata.hash, metadata.path_suffix + '.tmp')
                 remote_path = self._remote_artifact_path(metadata.type, metadata.hash, metadata.path_suffix)
-            self.nfs.upload(local_path, f'{tmp_remote_path}/{metadata.name}', allow_dir=True, progress_bar=True)
+            self.nfs.upload(f'{tmp_remote_path}/{metadata.name}', local_path)
             self.nfs.rename(tmp_remote_path, remote_path)
 
         tmp_remote_metadata_path = self._remote_metadata_path(metadata.type, metadata.hash, '.tmp')

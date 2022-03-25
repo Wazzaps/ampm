@@ -1,26 +1,20 @@
 import contextlib
+import hashlib
 import os
+import sys
+import re
+import shutil
 from math import ceil
 from pathlib import Path
 from typing import List, Iterable, ContextManager, Optional
 
-import pyNfsClient.utils
+import toml
 import tqdm
 from pyNfsClient import (Portmap, Mount, NFSv3, MNT3_OK, NFS_PROGRAM,
-                         NFS_V3, NFS3_OK, UNCHECKED, NFS3ERR_EXIST, UNSTABLE, NFS3ERR_NOTDIR)
+                         NFS_V3, NFS3_OK, UNCHECKED, NFS3ERR_EXIST, UNSTABLE, NFS3ERR_NOTDIR, NFS3ERR_ISDIR, NFSSTAT3)
 
-
-# Hotpatch pyNfsClient's `str_to_bytes` to accept bytes
-def str_to_bytes(str_v):
-    if isinstance(str_v, str):
-        return str_v.encode()
-    elif isinstance(str_v, bytes):
-        return str_v
-    else:
-        raise TypeError("str_to_bytes: str or bytes expected")
-
-
-pyNfsClient.utils.str_to_bytes.__code__ = str_to_bytes.__code__
+from ampm.repo.base import ArtifactRepo, ArtifactMetadata, ArtifactQuery, QueryNotFoundError, ARTIFACT_TYPES
+from ampm.repo.local import LOCAL_REPO
 
 
 def _calc_dir_size(path: Path) -> int:
@@ -82,7 +76,7 @@ class NfsConnection:
         else:
             mount.disconnect()
             portmap.disconnect()
-            raise ConnectionError(f"NFS mount failed: code={mnt_res['status']}", mnt_res)
+            raise ConnectionError(f"NFS mount failed: code={mnt_res['status']} ({NFSSTAT3[mnt_res['status']]})")
 
     @staticmethod
     def _splitpath(remote_path: str) -> List[str]:
@@ -103,7 +97,7 @@ class NfsConnection:
                 fh = lookup_res["resok"]["object"]["data"]
                 attrs = lookup_res["resok"]["obj_attributes"]["attributes"]
             else:
-                raise IOError("NFS lookup failed")
+                raise IOError(f"NFS lookup failed: code={lookup_res['status']} ({NFSSTAT3[lookup_res['status']]})")
 
         return fh, attrs
 
@@ -126,9 +120,9 @@ class NfsConnection:
                 if lookup_res["status"] == NFS3_OK:
                     dir_fh = lookup_res["resok"]["object"]["data"]
                 else:
-                    raise IOError("NFS lookup failed")
+                    raise IOError(f"NFS lookup failed: code={lookup_res['status']} ({NFSSTAT3[lookup_res['status']]})")
             else:
-                raise IOError("NFS mkdir failed")
+                raise IOError(f"NFS mkdir failed: code={mkdir_res['status']} ({NFSSTAT3[mkdir_res['status']]})")
 
         return dir_fh
 
@@ -141,7 +135,7 @@ class NfsConnection:
         if create_res["status"] == NFS3_OK:
             return create_res["resok"]["obj"]["handle"]["data"]
         else:
-            raise IOError(f"NFS create failed: code={create_res['status']}")
+            raise IOError(f"NFS create failed: code={create_res['status']} ({NFSSTAT3[create_res['status']]})")
 
     def list_dir(self, remote_path: str):
         fh, _attrs = self._open(self._splitpath(remote_path))
@@ -151,6 +145,10 @@ class NfsConnection:
             while entry:
                 yield entry[0]['name']
                 entry = entry[0]['nextentry']
+        elif readdir_res["status"] == NFS3ERR_NOTDIR:
+            raise NotADirectoryError()
+        else:
+            raise IOError(f"NFS readdir failed: code={readdir_res['status']} ({NFSSTAT3[readdir_res['status']]})")
 
     def walk_files(self, remote_path: str):
         fh, _attrs = self._open(self._splitpath(remote_path))
@@ -158,13 +156,13 @@ class NfsConnection:
         if readdir_res["status"] == NFS3_OK:
             entry = readdir_res["resok"]["reply"]["entries"]
             while entry:
-                if entry[0]['name'] != b'.' and entry[0]['name'] != b'..':
+                if not entry[0]['name'].startswith(b'.'):
                     yield from self.walk_files(remote_path + '/' + entry[0]['name'].decode())
                 entry = entry[0]['nextentry']
         elif readdir_res["status"] == NFS3ERR_NOTDIR:
             yield remote_path
         else:
-            raise IOError(f"NFS readdir failed: code={readdir_res['status']}")
+            raise IOError(f"NFS readdir failed: code={readdir_res['status']} ({NFSSTAT3[readdir_res['status']]})")
 
     def rename(self, old_path: str, new_path: str):
         old_path_parts = self._splitpath(old_path)
@@ -180,7 +178,17 @@ class NfsConnection:
         fh, _attrs = self._open(link_path[:-1])
         symlink_res = self.nfs3.symlink(fh, link_path[-1], dest_path)
         if symlink_res["status"] != NFS3_OK:
-            raise IOError("NFS symlink failed")
+            raise IOError(f"NFS symlink failed: code={symlink_res['status']} ({NFSSTAT3[symlink_res['status']]})")
+
+    def readlink(self, remote_path: str) -> bytes:
+        link_path = self._splitpath(remote_path)
+        fh, _attrs = self._open(link_path)
+        readlink_res = self.nfs3.readlink(fh)
+        print(readlink_res)
+
+        if readlink_res["status"] != NFS3_OK:
+            raise IOError(f"NFS readlink failed: code={readlink_res['status']} ({NFSSTAT3[readlink_res['status']]})")
+        return readlink_res["resok"]["data"]
 
     def read_stream(self, remote_path: str, chunk_size: int = 1024 * 50, progress_bar=False):
         remote_path = self._splitpath(remote_path)
@@ -205,8 +213,10 @@ class NfsConnection:
                 if bar:
                     bar.update(len(data) // 1024)
                 yield data
+            elif read_res["status"] == NFS3ERR_ISDIR:
+                raise IsADirectoryError()
             else:
-                raise IOError("NFS read failed")
+                raise IOError(f"NFS read failed: code={read_res['status']} ({NFSSTAT3[read_res['status']]})")
 
         if bar:
             bar.reset()
@@ -217,9 +227,12 @@ class NfsConnection:
         return b''.join(list(self.read_stream(remote_path, chunk_size, progress_bar)))
 
     def download(self, local_path: Path, remote_path: str, chunk_size: int = 1024 * 50, progress_bar=False):
-        with open(local_path, 'wb') as f:
-            for chunk in self.read_stream(remote_path, chunk_size, progress_bar):
-                f.write(chunk)
+        for remote_file_path in self.walk_files(remote_path):
+            local_file_path = local_path / remote_file_path[len(remote_path):].strip('/')
+            local_file_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(local_file_path, 'wb') as f:
+                for chunk in self.read_stream(remote_file_path, chunk_size, progress_bar):
+                    f.write(chunk)
 
     def write_stream(self, contents_gen: Iterable[bytes], remote_path: str, contents_len: int, progress_bar=False):
         remote_path = self._splitpath(remote_path)
@@ -237,7 +250,7 @@ class NfsConnection:
             if write_res["status"] == NFS3_OK:
                 assert write_res["resok"]["count"] == len(chunk)
             else:
-                raise IOError("NFS write failed")
+                raise IOError(f"NFS write failed: code={write_res['status']} ({NFSSTAT3[write_res['status']]})")
 
             offset += len(chunk)
             if bar:
@@ -311,3 +324,138 @@ class NfsConnection:
 
         else:
             raise IOError("Tried to upload a path that is neither a file nor a directory")
+
+
+class NfsRepo(ArtifactRepo):
+    def __init__(self, host: str, remote_path: str):
+        self.host = host
+        self.remote_path = remote_path
+        self.connection: Optional[NfsConnection] = None
+
+    @contextlib.contextmanager
+    def _connected(self) -> ContextManager["NfsConnection"]:
+        if self.connection is None:
+            with NfsConnection.connect(self.host, self.remote_path) as nfs:
+                self.connection = nfs
+                try:
+                    yield nfs
+                finally:
+                    self.connection = None
+        else:
+            yield self.connection
+
+    @staticmethod
+    def from_uri_part(uri_part: str) -> "NfsRepo":
+        host, remote_path = uri_part.split("/", 1)
+        return NfsRepo(host, '/' + remote_path)
+
+    def upload(self, metadata: ArtifactMetadata, local_path: Optional[Path]):
+        assert metadata.path_type in ARTIFACT_TYPES, f'Invalid artifact path type: {metadata.path_type}'
+
+        with self._connected() as nfs:
+            if local_path is not None:
+                print('Uploading artifact...', file=sys.stderr)
+
+                tmp_remote_base_path = self.artifact_base_path_of(metadata, '.tmp')
+                remote_base_path = self.artifact_base_path_of(metadata)
+                tmp_remote_path = self.artifact_path_of(metadata, '.tmp')
+
+                nfs.upload(local_path, f'{tmp_remote_path}{metadata.path_suffix}', allow_dir=True, progress_bar=True)
+                nfs.rename(tmp_remote_base_path, remote_base_path)
+
+            print('Uploading metadata...', file=sys.stderr)
+            tmp_remote_metadata_path = self.metadata_path_of(metadata.type, metadata.hash, '.toml.tmp')
+            remote_metadata_path = self.metadata_path_of(metadata.type, metadata.hash)
+            nfs.write(toml.dumps(metadata.to_dict()).encode('utf-8'), tmp_remote_metadata_path)
+            nfs.rename(tmp_remote_metadata_path, remote_metadata_path)
+
+            print('Done!', file=sys.stderr)
+
+    def lookup(self, query: ArtifactQuery) -> Iterable[ArtifactMetadata]:
+        with self._connected() as nfs:
+            if query.is_exact:
+                # print('Downloading metadata')
+                metadata_path = LOCAL_REPO.metadata_path_of(query.type, query.hash, '.toml')
+                tmp_metadata_path = Path(str(metadata_path) + '.tmp')
+                tmp_metadata_path.parent.mkdir(parents=True, exist_ok=True)
+                tmp_metadata_path.unlink(missing_ok=True)
+
+                try:
+                    nfs.download(tmp_metadata_path, self.metadata_path_of(query.type, query.hash))
+                except ConnectionError:
+                    raise
+                except IOError:
+                    raise QueryNotFoundError(query)
+
+                metadata = ArtifactMetadata.from_dict(toml.load(tmp_metadata_path))
+                tmp_metadata_path.rename(metadata_path)
+                yield metadata
+
+    def download(self, metadata: ArtifactMetadata) -> Path:
+        tmp_local_path = LOCAL_REPO.artifact_base_path_of(metadata, '.tmp')
+        local_path = LOCAL_REPO.artifact_base_path_of(metadata)
+        remote_path = self.artifact_base_path_of(metadata)
+
+        shutil.rmtree(tmp_local_path, ignore_errors=True)
+        shutil.rmtree(local_path, ignore_errors=True)
+
+        with self._connected() as nfs:
+            if metadata.path_location:
+                local_path.mkdir(parents=True, exist_ok=True)
+                nfs.download(tmp_local_path / metadata.name, remote_path, progress_bar=True)
+            else:
+                nfs.download(tmp_local_path, remote_path, progress_bar=True)
+
+        LOCAL_REPO.generate_caches_for_artifact(metadata)
+        tmp_local_path.rename(local_path)
+        return LOCAL_REPO.artifact_path_of(metadata)
+
+    def download_metadata_for_type(self, artifact_type: str):
+        base_path = self.metadata_path_of(artifact_type, '', '')
+        try:
+            with self._connected() as nfs:
+                for metadata_path in nfs.walk_files(base_path):
+                    matches = re.match(r'(.*)/([a-z0-9]{32})\.toml$', metadata_path[len(base_path):])
+                    if matches:
+                        type_extra = matches.group(1)
+                        artifact_hash = matches.group(2)
+                        local_path = LOCAL_REPO.metadata_path_of(artifact_type + type_extra, artifact_hash, '.toml')
+                        tmp_local_path = LOCAL_REPO.metadata_path_of(
+                            artifact_type + type_extra,
+                            artifact_hash,
+                            '.toml.tmp',
+                        )
+                        tmp_local_path.parent.mkdir(parents=True, exist_ok=True)
+                        nfs.download(tmp_local_path, self.metadata_path_of(artifact_type + type_extra, artifact_hash))
+                        tmp_local_path.rename(local_path)
+        except ConnectionError:
+            raise
+        except IOError as e:
+            print(e)
+            raise FileNotFoundError(f'Artifact type not found: {artifact_type}')
+
+    def hash_remote_file(self, remote_path: str, progress_bar=False) -> str:
+        with self._connected() as nfs:
+            hasher = hashlib.sha256(b'')
+            for chunk in nfs.read_stream(remote_path, progress_bar):
+                hasher.update(chunk)
+            return hasher.hexdigest()
+
+    @staticmethod
+    def metadata_path_of(artifact_type: str, artifact_hash: str, suffix='.toml') -> str:
+        return f'metadata/{artifact_type}/{artifact_hash or ""}{suffix}'
+
+    @staticmethod
+    def artifact_base_path_of(metadata: ArtifactMetadata, suffix='') -> str:
+        if metadata.path_location:
+            return metadata.path_location
+        else:
+            return f'artifacts/{metadata.type.lower()}/{metadata.hash.lower()}{suffix}'
+
+    @staticmethod
+    def artifact_path_of(metadata: ArtifactMetadata, suffix='') -> str:
+        if metadata.path_location:
+            return metadata.path_location
+        else:
+            return f'artifacts/{metadata.type.lower()}/{metadata.hash.lower()}{suffix}/{metadata.name}'
+

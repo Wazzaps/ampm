@@ -15,6 +15,11 @@ else:
 # convert string to bytes
 def str_to_bytes(str_v):
     if PY3:
-        return str(str_v).encode()
+        if isinstance(str_v, str):
+            return str_v.encode()
+        elif isinstance(str_v, bytes):
+            return str_v
+        else:
+            raise TypeError("str_to_bytes: str or bytes expected")
     else:
         return bytes(str_v)
