@@ -64,7 +64,7 @@ class ArtifactMetadata:
             env=data["env"],
             path_type=data["path"]["type"],
             path_location=data["path"].get("location", None),
-            path_hash=data["path"]["hash"],
+            path_hash=data["path"].get("hash", None),
         )
 
     @cached_property

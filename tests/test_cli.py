@@ -77,6 +77,21 @@ def test_upload_dir_uncompressed(nfs_repo_path, clean_repos):
            == b"boo\n", "File nested has wrong contents"
 
 
+def test_upload_dir_uncompressed_location(nfs_repo_path, clean_repos):
+    _ = clean_repos
+    artifact_hash = upload('tests/dummy_data/foo_dir', artifact_type='foo', remote_path='/custom_dir/foo_dir')
+    assert (nfs_repo_path / 'metadata' / 'foo' / f'{artifact_hash}.toml').is_file(), \
+        "Metadata file wasn't created"
+    assert (nfs_repo_path / 'custom_dir' / 'foo_dir').is_dir(), \
+        "Dir wasn't created"
+    assert (nfs_repo_path / 'custom_dir' / 'foo_dir' / 'hello.txt').is_file(), \
+        "File inside wasn't created"
+    assert (nfs_repo_path / 'custom_dir' / 'foo_dir' / 'nested' / 'boo.txt').is_file(), \
+        "File nested inside wasn't created"
+    assert (nfs_repo_path / 'custom_dir' / 'foo_dir' / 'nested' / 'boo.txt').read_bytes() \
+           == b"boo\n", "File nested has wrong contents"
+
+
 def test_download_single_file_uncompressed(clean_repos):
     _ = clean_repos
     artifact_hash = upload('tests/dummy_data/foobar.txt', artifact_type='foo')
@@ -89,6 +104,15 @@ def test_download_single_file_uncompressed_location(clean_repos):
     artifact_hash = upload('tests/dummy_data/foobar.txt', artifact_type='foo', remote_path='/custom_dir/foobar.txt')
     artifact_path = download(f'foo:{artifact_hash}', {})
     assert artifact_path.read_bytes() == b"foo bar\n", "Downloaded file has wrong contents"
+
+
+def test_download_dir_uncompressed(clean_repos):
+    _ = clean_repos
+    artifact_hash = upload('tests/dummy_data/foo_dir', artifact_type='foo')
+    artifact_path = download(f'foo:{artifact_hash}', {})
+    assert (artifact_path / 'hello.txt').is_file(), "File inside wasn't created"
+    assert (artifact_path / 'nested' / 'boo.txt').is_file(), "File nested inside wasn't created"
+    assert (artifact_path / 'nested' / 'boo.txt').read_bytes() == b"boo\n", "File nested has wrong contents"
 
 
 def test_stress(clean_repos):
