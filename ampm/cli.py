@@ -14,6 +14,7 @@ from typing import Tuple, Optional, Dict, Mapping
 from ampm.repo.base import ArtifactQuery, AmbiguousQueryError, RepoGroup, QueryNotFoundError, \
     ArtifactMetadata, ArtifactRepo, REMOTE_REPO_URI
 from ampm.repo.local import LOCAL_REPO
+from ampm import __version__
 
 
 class OrderedGroup(click.Group):
@@ -27,6 +28,7 @@ class OrderedGroup(click.Group):
 
 
 @click.group(cls=OrderedGroup)
+@click.version_option(__version__)
 @click.option('-s', '--server', help=f'Remote repository server (default: {REMOTE_REPO_URI})')
 @click.pass_context
 def cli(ctx: click.Context, server: Optional[str]):

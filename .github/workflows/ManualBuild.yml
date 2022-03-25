@@ -1,0 +1,37 @@
+name: Manual Build
+
+on: workflow_dispatch
+
+jobs:
+  build-linux:
+    name: Build linux binaries
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+      - name: Build
+        run: ./build.sh
+      - name: Upload results
+        uses: actions/upload-artifact@v3
+        with:
+          name: ampm-linux-binaries
+          if-no-files-found: error
+          path: |
+            dist/ampm.tar.gz
+            dist/get_ampm.sh
+  test-linux:
+    name: Test linux binaries
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+      - name: Setup Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: "3.8"
+      - name: Install dependencies
+        run: python3.8 -m pip install pytest
+      - name: Run Tests
+        run: ./run-tests.sh
