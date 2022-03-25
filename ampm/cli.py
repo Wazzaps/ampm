@@ -67,8 +67,9 @@ def handle_common_errors():
         sys.exit(1)
     except PermissionError:
         local_repo_path = str(LOCAL_REPO.path)
+        local_user = os.environ.get('USER', 'YOUR_USER')
         print(f'The local artifact store ({local_repo_path}) doesn\'t exist and you\'re not root. '
-              f'Please run `sudo mkdir {local_repo_path} && sudo chmod 777 {local_repo_path}`.', file=sys.stderr)
+              f'Please run `sudo mkdir -p {local_repo_path} && sudo chown -R {local_user}:{local_user} {local_repo_path}`.', file=sys.stderr)
         sys.exit(1)
     except ConnectionError as e:
         print(f'Remote repo cannot be contacted: {" ".join(str(a) for a in e.args)}', file=sys.stderr)
