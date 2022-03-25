@@ -9,7 +9,7 @@ fi
 echo 'Downloading ampm...'
 mkdir -p /opt/ampm
 cd /opt/ampm
-curl --progress-bar https://github.com/Wazzaps/ampm/releases/latest/download/ampm.tar.gz | tar xz
+curl --progress-bar -fsSL https://github.com/Wazzaps/ampm/releases/latest/download/ampm.tar.gz | tar xz
 
 echo ''
 echo 'Adding ampm launcher to /usr/local/bin/...'
