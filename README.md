@@ -2,23 +2,10 @@
 
 ## Building:
 
-### With docker:
+This will use a `pyinstaller-manylinux` docker image to build a portable binary
 
 ```shell
-sudo docker build -t ampm_build $PWD
-sudo docker run --rm -it -v $PWD:/code ampm_build
-ls -l ./dist/ampm
-```
-
-### Without docker:
-
-Install dependencies as needed:
-
-```shell
-python3 ./vendor/PyInstaller/__main__.py --onefile --clean --noconfirm --name=ampm ampm/cli.py
-mv ./dist/ampm/ampm ./dist/ampm/ampm_py
-cp ./ampm/ampm.sh ./dist/ampm/ampm
-ls -l ./dist/ampm
+sudo ./build.sh
 ```
 
 ## Implemented:
