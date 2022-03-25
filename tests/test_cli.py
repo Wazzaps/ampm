@@ -1,3 +1,4 @@
+import json
 import re
 import time
 import ampm.cli
@@ -33,6 +34,15 @@ def download(identifier: str, attributes: Dict[str, str]) -> Path:
     artifact_path = Path(result.stdout.strip())
     assert artifact_path.exists(), f'Downloaded artifact doesn\'t exist:\n{formatted_output}'
     return artifact_path
+
+
+def list_(identifier: str, attributes: Dict[str, str]) -> dict:
+    runner = CliRunner(mix_stderr=False)
+    result = runner.invoke(ampm.cli.cli, ['list', identifier, '--format=json'] + [f'--attr={k}={v}' for k, v in attributes.items()])
+    formatted_output = f'== STDERR ==\n{result.stderr}\n\n== STDOUT ==\n{result.stdout}'
+    assert result.exit_code == 0, formatted_output
+
+    return json.loads(result.stdout.strip())
 
 
 def test_upload_single_file_uncompressed(nfs_repo_path, clean_repos):
@@ -100,3 +110,10 @@ def test_stress(clean_repos):
     download_duration = time.time() - t
     print(f'Downloaded {COUNT} artifacts in {download_duration} seconds')
     assert download_duration < 5, f"Downloading {COUNT} artifacts took too long"
+
+    t = time.time()
+    artifacts = list_('foo', {})
+    assert len(artifacts) == COUNT, f"Listing {COUNT} artifacts returned {len(artifacts)} instead"
+    list_duration = time.time() - t
+    print(f'Listed {COUNT} artifacts in {list_duration} seconds')
+    assert list_duration < 1, f"Listing {COUNT} artifacts took too long"
