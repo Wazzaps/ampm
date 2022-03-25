@@ -17,3 +17,4 @@ install /opt/ampm/ampm.sh /usr/local/bin/ampm
 
 echo ''
 echo 'Done! Try running `ampm --help` to see what you can do with ampm.'
+echo 'To uninstall, run `sudo /opt/ampm/uninstall.sh`.'
