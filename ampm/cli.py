@@ -15,7 +15,7 @@ from typing import Tuple, Optional, Dict, Mapping
 from math import ceil
 from pathlib import Path
 from ampm.repo.base import ArtifactQuery, AmbiguousQueryError, RepoGroup, QueryNotFoundError, \
-    ArtifactMetadata, ArtifactRepo, REMOTE_REPO_URI
+    ArtifactMetadata, ArtifactRepo, REMOTE_REPO_URI, AmbiguousComparisonError
 from ampm.repo.local import LOCAL_REPO
 from ampm import __version__
 from ampm.utils import _calc_dir_size
@@ -77,6 +77,9 @@ def handle_common_errors():
         sys.exit(1)
     except ConnectionError as e:
         print(f'Remote repo cannot be contacted: {" ".join(str(a) for a in e.args)}', file=sys.stderr)
+        sys.exit(1)
+    except AmbiguousComparisonError as e:
+        print(f'{" ".join(str(a) for a in e.args)}', file=sys.stderr)
         sys.exit(1)
 
 

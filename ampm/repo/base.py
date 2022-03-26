@@ -157,6 +157,10 @@ class AmbiguousQueryError(Exception):
         self.options = options
 
 
+class AmbiguousComparisonError(Exception):
+    pass
+
+
 class QueryNotFoundError(Exception):
     def __init__(self, query: Optional[ArtifactQuery]):
         self.query = query

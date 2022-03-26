@@ -38,6 +38,21 @@ ampm get foo/bar:7tew33maphcutgbfqui3cxnddus56isk
 # Selects artifact by attribute (will fail if not unique)
 ampm get foobar -a arch=x86_64
 
+# Gets latest release if it's the only non-unique attribute
+ampm get foobar -a arch=x86_64 -a pubdate=@date:latest
+
+# Gets latest release if it's the only non-unique attribute, except for `irrelevant_attr`, which is ignored
+ampm get foobar -a arch=x86_64 -a pubdate=@date:latest -a irrelevant_attr=@ignore
+
+# Gets latest release, ignoring attributes other than `arch`
+ampm get foobar -a arch=x86_64 -a pubdate=@date:latest -a @any=@ignore
+
+# Gets any release with the current biggest major version
+ampm get foobar -a arch=x86_64 -a major_ver=@num:biggest -a @any=@ignore
+
+# Gets latest release that's newer-or-equal to 1.0.0 but older than 2.0.0 (not including prereleases)
+ampm get foobar -a arch=x86_64 -a version='@semver:^1.0.0'
+
 # List all artifacts with type
 ampm list foobar
 
@@ -58,22 +73,6 @@ ampm env foobar:mbf5qxqli76zx7btc5n7fkq47tjs6cl2
 
 # Custom NFS server
 ampm --server='nfs://1.2.3.4/some/repo' get foobar:mbf5qxqli76zx7btc5n7fkq47tjs6cl2
-```
-
-## TODO:
-
-```shell
-# Gets newest version if it's the only non-unique attribute
-ampm get foobar -a arch=x86_64 -a version=@semver:^1.0
-
-# Gets latest release if it's the only non-unique attribute
-ampm get foobar -a arch=x86_64 -a pubdate=@date:latest
-
-# Gets latest release if it's the only non-unique attribute, except for `irrelevant_attr`, which is ignored
-ampm get foobar -a arch=x86_64 -a pubdate=@date:latest -a irrelevant_attr=@ignore
-
-# Gets latest release, ignoring attributes other than `arch`
-ampm get foobar -a arch=x86_64 -a pubdate=@date:latest -a @any=@ignore
 ```
 
 ## Hash calculation algorithm
