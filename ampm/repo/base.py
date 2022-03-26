@@ -12,7 +12,10 @@ import toml
 ARTIFACT_TYPES = ['file', 'dir', 'tar.gz', 'gz']
 
 LOCAL_REPO_URI = 'file:///var/ampm'
-REMOTE_REPO_URI = Path('/opt/ampm/repo_uri').read_text().strip()
+try:
+    REMOTE_REPO_URI = Path('/opt/ampm/repo_uri').read_text().strip()
+except FileNotFoundError:
+    REMOTE_REPO_URI = ''
 
 
 def hash_buffer(buffer) -> str:
