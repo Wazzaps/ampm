@@ -16,6 +16,9 @@ class LocalRepo(ArtifactRepo):
     def from_uri_part(uri_part: str) -> "LocalRepo":
         return LocalRepo(Path(uri_part))
 
+    def into_uri(self) -> str:
+        return f'file://{str(self.path)}'
+
     def upload(self, metadata: ArtifactMetadata, local_path: Optional[Path]):
         raise NotImplementedError('LocalRepo does not support upload')
 
@@ -71,7 +74,8 @@ class LocalRepo(ArtifactRepo):
                     if attr not in artifact_attrs or filtered_attrs[attr] != artifact_attrs[attr]:
                         break
                 else:
-                    if comparator.filter(compared_attr[2], metadata.combined_attrs[compared_attr[0]]):
+                    if compared_attr[0] in metadata.combined_attrs and \
+                            comparator.filter(compared_attr[2], metadata.combined_attrs[compared_attr[0]]):
                         for attr in artifact_attrs:
                             all_seen_attrs.add(attr)
                         matched_metadata.append(metadata)

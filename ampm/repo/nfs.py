@@ -355,6 +355,9 @@ class NfsRepo(ArtifactRepo):
         host, remote_path = uri_part.split("/", 1)
         return NfsRepo(host, '/' + remote_path)
 
+    def into_uri(self) -> str:
+        return f"nfs://{self.host}/{self.remote_path.lstrip('/')}"
+
     def upload(self, metadata: ArtifactMetadata, local_path: Optional[Path]):
         assert metadata.path_type in ARTIFACT_TYPES, f'Invalid artifact path type: {metadata.path_type}'
 

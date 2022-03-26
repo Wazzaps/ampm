@@ -1,11 +1,10 @@
 import random
-# noinspection PyUnresolvedReferences
-from utils import *
+import shutil
 from pathlib import Path
 from ampm.repo.nfs import NfsConnection, NfsRepo
 
 
-def test_operations(clean_repos, nfs_repo: NfsRepo, nfs_repo_path: Path, local_repo_path):
+def test_operations(clean_repos, nfs_repo: NfsRepo, nfs_repo_path: Path):
     _ = clean_repos
 
     with NfsConnection.connect(nfs_repo.host, nfs_repo.remote_path) as nfs:

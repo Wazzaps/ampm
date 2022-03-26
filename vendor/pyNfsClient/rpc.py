@@ -148,7 +148,7 @@ class RPC(object):
                     if server_has_port_security:
                         random_port = randint(500, 1023)
                     else:
-                        random_port = randint(6000, 6999)
+                        random_port = 0
                     i += 1
                     self.client.bind(('', random_port))
                     self.client_port = random_port

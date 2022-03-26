@@ -135,6 +135,9 @@ class ArtifactRepo:
     def from_uri_part(uri_part: str) -> "ArtifactRepo":
         raise NotImplementedError()
 
+    def into_uri(self) -> str:
+        raise NotImplementedError()
+
     def upload(self, metadata: ArtifactMetadata, local_path: Optional[Path]):
         raise NotImplementedError()
 

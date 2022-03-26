@@ -2,56 +2,78 @@ import json
 import gzip
 import re
 import time
+import pytest
 import ampm.cli
-# noinspection PyUnresolvedReferences
-from utils import *
 from pathlib import Path
 from typing import Dict, Optional
 from click.testing import CliRunner
 
 
-def upload(local_path: str, artifact_type: str, compressed: bool, attributes=None, remote_path: Optional[str] = None) -> str:
-    if attributes is None:
-        attributes = {}
-    runner = CliRunner(mix_stderr=False)
+@pytest.fixture()
+def upload(nfs_repo_uri):
+    def _upload(
+            local_path: str,
+            artifact_type: str,
+            compressed: bool,
+            attributes=None,
+            remote_path: Optional[str] = None
+    ) -> str:
+        if attributes is None:
+            attributes = {}
+        runner = CliRunner(mix_stderr=False, env={'AMPM_SERVER': nfs_repo_uri})
 
-    args = ['upload', local_path, '--type', artifact_type, '--compressed' if compressed else '--uncompressed']
-    if remote_path:
-        args += ['--remote-path', remote_path]
-    for k, v in attributes.items():
-        args += ['--attr', f'{k}={v}']
+        args = ['upload', local_path, '--type', artifact_type, '--compressed' if compressed else '--uncompressed']
+        if remote_path:
+            args += ['--remote-path', remote_path]
+        for k, v in attributes.items():
+            args += ['--attr', f'{k}={v}']
 
-    result = runner.invoke(ampm.cli.cli, args)
-    formatted_output = f'== STDERR ==\n{result.stderr}\n\n== STDOUT ==\n{result.stdout}'
-    assert result.exit_code == 0, formatted_output
+        result = runner.invoke(ampm.cli.cli, args, catch_exceptions=False)
+        formatted_output = f'== STDERR ==\n{result.stderr}\n\n== STDOUT ==\n{result.stdout}'
+        assert result.exit_code == 0, formatted_output
 
-    artifact_hash = re.match(f'^{artifact_type}:([a-z0-9]{{32}})$', result.stdout.strip())
-    assert artifact_hash is not None, f'Unexpected output:\n{formatted_output}'
-    return artifact_hash.group(1)
-
-
-def download(identifier: str, attributes: Dict[str, str]) -> Path:
-    runner = CliRunner(mix_stderr=False)
-    result = runner.invoke(ampm.cli.cli, ['get', identifier] + [f'--attr={k}={v}' for k, v in attributes.items()])
-    formatted_output = f'== STDERR ==\n{result.stderr}\n\n== STDOUT ==\n{result.stdout}'
-    assert result.exit_code == 0, formatted_output
-
-    artifact_path = Path(result.stdout.strip())
-    assert artifact_path.exists(), f'Downloaded artifact doesn\'t exist:\n{formatted_output}'
-    return artifact_path
+        artifact_hash = re.match(f'^{artifact_type}:([a-z0-9]{{32}})$', result.stdout.strip())
+        assert artifact_hash is not None, f'Unexpected output:\n{formatted_output}'
+        return artifact_hash.group(1)
+    return _upload
 
 
-def list_(identifier: str, attributes: Dict[str, str]) -> dict:
-    runner = CliRunner(mix_stderr=False)
-    result = runner.invoke(ampm.cli.cli, ['list', identifier, '--format=json'] + [f'--attr={k}={v}' for k, v in attributes.items()])
-    formatted_output = f'== STDERR ==\n{result.stderr}\n\n== STDOUT ==\n{result.stdout}'
-    assert result.exit_code == 0, formatted_output
+@pytest.fixture()
+def download(nfs_repo_uri):
+    def _download(identifier: str, attributes: Dict[str, str]) -> Path:
+        runner = CliRunner(mix_stderr=False, env={'AMPM_SERVER': nfs_repo_uri})
+        result = runner.invoke(
+            ampm.cli.cli,
+            ['get', identifier] + [f'--attr={k}={v}' for k, v in attributes.items()],
+            catch_exceptions=False
+        )
+        formatted_output = f'== STDERR ==\n{result.stderr}\n\n== STDOUT ==\n{result.stdout}'
+        assert result.exit_code == 0, formatted_output
 
-    return json.loads(result.stdout.strip())
+        artifact_path = Path(result.stdout.strip())
+        assert artifact_path.exists(), f'Downloaded artifact doesn\'t exist:\n{formatted_output}'
+        return artifact_path
+    return _download
+
+
+@pytest.fixture()
+def list_(nfs_repo_uri):
+    def _list_(identifier: str, attributes: Dict[str, str]) -> dict:
+        runner = CliRunner(mix_stderr=False, env={'AMPM_SERVER': nfs_repo_uri})
+        result = runner.invoke(
+            ampm.cli.cli,
+            ['list', identifier, '--format=json'] + [f'--attr={k}={v}' for k, v in attributes.items()],
+            catch_exceptions=False
+        )
+        formatted_output = f'== STDERR ==\n{result.stderr}\n\n== STDOUT ==\n{result.stdout}'
+        assert result.exit_code == 0, formatted_output
+
+        return json.loads(result.stdout.strip())
+    return _list_
 
 
 @pytest.mark.parametrize('is_compressed', ['compressed', 'uncompressed'])
-def test_upload_single_file(nfs_repo_path, clean_repos, is_compressed):
+def test_upload_single_file(nfs_repo_path, clean_repos, upload, is_compressed):
     _ = clean_repos
     artifact_hash = upload('tests/dummy_data/foobar.txt', artifact_type='foo', compressed=is_compressed == 'compressed')
     assert (nfs_repo_path / 'metadata' / 'foo' / f'{artifact_hash}.toml').is_file(), "Metadata file wasn't created"
@@ -71,7 +93,7 @@ def test_upload_single_file(nfs_repo_path, clean_repos, is_compressed):
 
 
 @pytest.mark.parametrize('is_compressed', ['compressed', 'uncompressed'])
-def test_upload_single_file_location(nfs_repo_path, clean_repos, is_compressed):
+def test_upload_single_file_location(nfs_repo_path, clean_repos, upload, is_compressed):
     _ = clean_repos
     artifact_hash = upload(
         'tests/dummy_data/foobar.txt',
@@ -95,7 +117,7 @@ def test_upload_single_file_location(nfs_repo_path, clean_repos, is_compressed):
 
 
 @pytest.mark.parametrize('is_compressed', ['compressed', 'uncompressed'])
-def test_upload_dir(nfs_repo_path, clean_repos, is_compressed):
+def test_upload_dir(nfs_repo_path, clean_repos, upload, is_compressed):
     _ = clean_repos
     artifact_hash = upload(
         'tests/dummy_data/foo_dir',
@@ -119,7 +141,7 @@ def test_upload_dir(nfs_repo_path, clean_repos, is_compressed):
 
 
 @pytest.mark.parametrize('is_compressed', ['compressed', 'uncompressed'])
-def test_upload_dir_location(nfs_repo_path, clean_repos, is_compressed):
+def test_upload_dir_location(nfs_repo_path, clean_repos, upload, is_compressed):
     _ = clean_repos
     artifact_hash = upload(
         'tests/dummy_data/foo_dir',
@@ -144,7 +166,7 @@ def test_upload_dir_location(nfs_repo_path, clean_repos, is_compressed):
 
 
 @pytest.mark.parametrize('is_compressed', ['compressed', 'uncompressed'])
-def test_download_single_file(clean_repos, is_compressed):
+def test_download_single_file(clean_repos, upload, download, is_compressed):
     _ = clean_repos
     artifact_hash = upload(
         'tests/dummy_data/foobar.txt',
@@ -156,7 +178,7 @@ def test_download_single_file(clean_repos, is_compressed):
 
 
 @pytest.mark.parametrize('is_compressed', ['compressed', 'uncompressed'])
-def test_download_single_file_location(clean_repos, is_compressed):
+def test_download_single_file_location(clean_repos, upload, download, is_compressed):
     _ = clean_repos
     artifact_hash = upload(
         'tests/dummy_data/foobar.txt',
@@ -169,7 +191,7 @@ def test_download_single_file_location(clean_repos, is_compressed):
 
 
 @pytest.mark.parametrize('is_compressed', ['compressed', 'uncompressed'])
-def test_download_dir(clean_repos, is_compressed):
+def test_download_dir(clean_repos, upload, download, is_compressed):
     _ = clean_repos
     artifact_hash = upload(
         'tests/dummy_data/foo_dir',
@@ -183,7 +205,7 @@ def test_download_dir(clean_repos, is_compressed):
 
 
 @pytest.mark.parametrize('filter_type', ['num', 'date', 'semver'])
-def test_attr_filters(clean_repos, filter_type):
+def test_attr_filters(clean_repos, upload, list_, filter_type):
     _ = clean_repos
 
     sample_data = {
@@ -236,7 +258,7 @@ def test_attr_filters(clean_repos, filter_type):
         assert artifacts == [expected], f"Wrong artifacts for {query}"
 
 
-def test_attr_filters_ambiguous(clean_repos):
+def test_attr_filters_ambiguous(clean_repos, upload, list_):
     _ = clean_repos
 
     artifact_hashes = []
@@ -257,10 +279,10 @@ def test_attr_filters_ambiguous(clean_repos):
     with pytest.raises(AssertionError):
         list_('foo', {'a': '@num:biggest'})
 
-    with pytest.raises(AssertionError):
+    with pytest.raises(ValueError):
         list_('foo', {'a': '@ignore'})
 
-    with pytest.raises(AssertionError):
+    with pytest.raises(ValueError):
         list_('foo', {'@any': '@ignore'})
 
     assert len(list_('foo', {'a': '@num:biggest', 'b': '1'})) == 1, "Wrong number of artifacts with `biggest` on a"
@@ -274,14 +296,16 @@ def test_attr_filters_ambiguous(clean_repos):
         "Wrong number of artifacts with `biggest` on a and `ignore` on `any`"
 
 
-def test_stress(clean_repos):
+def test_stress(clean_repos, upload, list_, download):
     _ = clean_repos
     artifact_hashes = []
 
-    COUNT = 200
+    COUNT = 5000
 
     t = time.time()
     for i in range(COUNT):
+        if i % 100 == 0:
+            print(f'{i}/{COUNT}')
         artifact_hashes.append(upload(
             'tests/dummy_data/foobar.txt',
             artifact_type='foo',
@@ -289,14 +313,16 @@ def test_stress(clean_repos):
         ))
     upload_duration = time.time() - t
     print(f'Uploaded {COUNT} artifacts in {upload_duration} seconds')
-    assert upload_duration < 10, f"Uploading {COUNT} artifacts took too long"
+    assert upload_duration < 100, f"Uploading {COUNT} artifacts took too long"
 
     t = time.time()
-    for artifact_hash in artifact_hashes:
+    for i, artifact_hash in enumerate(artifact_hashes):
+        if i % 100 == 0:
+            print(f'{i}/{COUNT}')
         download(f'foo:{artifact_hash}', {})
     download_duration = time.time() - t
     print(f'Downloaded {COUNT} artifacts in {download_duration} seconds')
-    assert download_duration < 5, f"Downloading {COUNT} artifacts took too long"
+    assert download_duration < 60, f"Downloading {COUNT} artifacts took too long"
 
     t = time.time()
     artifacts = list_('foo', {})
