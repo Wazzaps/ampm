@@ -6,7 +6,8 @@ The easiest way is by running:
 ```shell
 curl -fsSL https://github.com/Wazzaps/ampm/releases/latest/download/get_ampm.sh | sudo sh
 ```
-But you can also download `ampm.tar.gz` and extract it to `/opt/ampm/`, and then run `install /opt/ampm/ampm.sh /usr/local/bin/ampm`
+But you can also download `ampm.tar.gz`, extract it to `/opt/ampm/`,
+then run `install /opt/ampm/ampm.sh /usr/local/bin/ampm`, and then put your repo uri in `/opt/ampm/repo_uri`.
 
 ## How to build manually:
 
