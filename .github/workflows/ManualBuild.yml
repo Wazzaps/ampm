@@ -24,6 +24,7 @@ jobs:
     name: Test linux binaries
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    container: python:3
     steps:
       - name: Checkout code
         uses: actions/checkout@v2
@@ -32,8 +33,10 @@ jobs:
         with:
           python-version: "3.8"
       - name: Install tirpc
-        run: apt update -y && apt install -y libtirpc3
+        run: apt update -y && apt install -y libtirpc3 python3-pip rpcbind
       - name: Install dependencies
-        run: python3.8 -m pip install pytest
+        run: python3 -m pip install pytest
+      - name: Run rpcbind
+        run: rpcbind
       - name: Run Tests
         run: ./run-tests.sh
