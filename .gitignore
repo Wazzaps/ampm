@@ -27,6 +27,8 @@ share/python-wheels/
 *.egg
 MANIFEST
 !vendor/**/*
+vendor/**/__pycache__/
+vendor/**/*.pyc
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
