@@ -1,6 +1,14 @@
 # ampm: Artifact Manager, (not a) Package Manager
 
-## Building:
+## How to install
+
+The easiest way is by running:
+```shell
+curl -fsSL https://github.com/Wazzaps/ampm/releases/latest/download/get_ampm.sh | sudo sh
+```
+But you can also download `ampm.tar.gz` and extract it to `/opt/ampm/`, and then run `install /opt/ampm/ampm.sh /usr/local/bin/ampm`
+
+## How to build manually:
 
 This will use a `pyinstaller-manylinux` docker image to build a portable binary
 
@@ -8,7 +16,7 @@ This will use a `pyinstaller-manylinux` docker image to build a portable binary
 sudo ./build.sh
 ```
 
-## Implemented:
+## All features:
 
 ```shell
 # Upload file to default location
