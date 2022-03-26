@@ -1,20 +1,24 @@
 import collections
 import contextlib
 import datetime
+import gzip
 import hashlib
 import json
 import os
+import random
 import sys
-from pathlib import Path
-
+import tarfile
+import tqdm
 import click
 import colorama
 from typing import Tuple, Optional, Dict, Mapping
-
+from math import ceil
+from pathlib import Path
 from ampm.repo.base import ArtifactQuery, AmbiguousQueryError, RepoGroup, QueryNotFoundError, \
     ArtifactMetadata, ArtifactRepo, REMOTE_REPO_URI
 from ampm.repo.local import LOCAL_REPO
 from ampm import __version__
+from ampm.utils import _calc_dir_size
 
 
 class OrderedGroup(click.Group):
@@ -227,12 +231,13 @@ def upload(
 
         If LOCAL_PATH is unspecified, assume already it's uploaded to value of `--remote-path`
     """
-    assert not compressed, 'Compressed uploads are not supported yet'
 
     if local_path is None and remote_path is None:
         raise click.BadParameter('Must specify either LOCAL_PATH or --remote-path')
 
     remote_repo = ArtifactRepo.by_uri(ctx.obj['server'])
+
+    # TODO: Remove tmp files
 
     if local_path is not None:
         name = name or local_path.name
@@ -240,14 +245,64 @@ def upload(
             artifact_hash = None
             if compressed:
                 artifact_type = 'tar.gz'
+
+                # TODO: Streaming implementation
+
+                # Compress it
+                tmp_file = Path(f'/tmp/ampm_tmp_{random.randbytes(8).hex()}')
+                total_size = ceil(_calc_dir_size(local_path) / 1024)
+                bar = tqdm.tqdm(
+                    total=total_size,
+                    unit='KB',
+                    desc=f"Compressing {local_path.name}"
+                )
+                size_left = total_size
+                with tmp_file.open('wb') as f:
+                    with tarfile.open(fileobj=f, mode='w:gz', compresslevel=6) as tar:
+                        for path in local_path.rglob('*'):
+                            if path.is_file():
+                                tar.add(path, arcname=path.relative_to(local_path))
+                                bar.update(min(ceil(path.stat().st_size / 1024), size_left))
+                                size_left -= ceil(path.stat().st_size / 1024)
+                            elif path.is_dir():
+                                tar.add(path, arcname=path.relative_to(local_path), recursive=False)
+
+                artifact_hash = hashlib.sha256(tmp_file.read_bytes()).hexdigest()
+                bar.close()
+                local_path = tmp_file
             else:
                 artifact_type = 'dir'
         elif local_path.is_file():
-            artifact_hash = hashlib.sha256(local_path.read_bytes()).hexdigest()
             if compressed:
                 artifact_type = 'gz'
+
+                # Compress it
+                tmp_file = Path(f'/tmp/ampm_tmp_{random.randbytes(8).hex()}')
+                total_size = ceil(local_path.stat().st_size / 1024)
+                bar = tqdm.tqdm(
+                    total=total_size,
+                    unit='KB',
+                    desc=f"Compressing {local_path.name}"
+                )
+                size_left = total_size
+                with gzip.GzipFile(tmp_file, mode='wb') as zbuffer:
+                    with local_path.open('rb') as f:
+                        while True:
+                            data = f.read(1024*1024)
+                            if len(data) == 0:
+                                break
+                            zbuffer.write(data)
+                            bar.update(min(1024, size_left))
+                            size_left -= 1024
+
+                # TODO: Streaming implementation
+                artifact_hash = hashlib.sha256(tmp_file.read_bytes()).hexdigest()
+                bar.close()
+                local_path = tmp_file
             else:
                 artifact_type = 'file'
+                # TODO: Streaming implementation
+                artifact_hash = hashlib.sha256(local_path.read_bytes()).hexdigest()
         else:
             raise click.BadParameter(f'Unsupported file type: {local_path} ({local_path.stat().st_type})')
     else:

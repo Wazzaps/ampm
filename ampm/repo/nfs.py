@@ -1,9 +1,12 @@
 import contextlib
+import gzip
 import hashlib
+import io
 import os
 import sys
 import re
 import shutil
+import tarfile
 from math import ceil
 from pathlib import Path
 from typing import List, Iterable, ContextManager, Optional
@@ -13,23 +16,10 @@ import tqdm
 from pyNfsClient import (Portmap, Mount, NFSv3, MNT3_OK, NFS_PROGRAM,
                          NFS_V3, NFS3_OK, UNCHECKED, NFS3ERR_EXIST, UNSTABLE, NFS3ERR_NOTDIR, NFS3ERR_ISDIR, NFSSTAT3)
 
-from ampm.repo.base import ArtifactRepo, ArtifactMetadata, ArtifactQuery, QueryNotFoundError, ARTIFACT_TYPES
+from ampm.repo.base import ArtifactRepo, ArtifactMetadata, ArtifactQuery, QueryNotFoundError, ARTIFACT_TYPES, \
+    ArtifactCorruptedError
 from ampm.repo.local import LOCAL_REPO
-
-
-def _calc_dir_size(path: Path) -> int:
-    """
-    Calculate the size of a directory.
-
-    :param path: Path to the directory.
-    :return: Sum of all file sizes inside the directory.
-    """
-    total_size = 0
-    for dirpath, _dirnames, filenames in os.walk(path):
-        for f in filenames:
-            fp = os.path.join(dirpath, f)
-            total_size += os.path.getsize(fp)
-    return total_size
+from ampm.utils import _calc_dir_size
 
 
 class NfsConnection:
@@ -225,13 +215,30 @@ class NfsConnection:
     def read(self, remote_path: str, chunk_size: int = 1024 * 50, progress_bar=False):
         return b''.join(list(self.read_stream(remote_path, chunk_size, progress_bar)))
 
-    def download(self, local_path: Path, remote_path: str, chunk_size: int = 1024 * 50, progress_bar=False):
+    def download(
+            self,
+            local_path: Path,
+            remote_path: str,
+            chunk_size: int = 1024 * 50,
+            progress_bar=False
+    ) -> Optional[str]:
+        got_one_file = False
+        hasher = hashlib.sha256(b'')
+
         for remote_file_path in self.walk_files(remote_path):
+            if got_one_file:
+                hasher = None  # Only hash one file
             local_file_path = local_path / remote_file_path[len(remote_path):].strip('/')
             local_file_path.parent.mkdir(parents=True, exist_ok=True)
             with open(local_file_path, 'wb') as f:
                 for chunk in self.read_stream(remote_file_path, chunk_size, progress_bar):
                     f.write(chunk)
+                    if hasher:
+                        hasher.update(chunk)
+            got_one_file = True
+
+        if hasher:
+            return hasher.hexdigest()
 
     def write_stream(self, contents_gen: Iterable[bytes], remote_path: str, contents_len: int, progress_bar=False):
         remote_path = self._splitpath(remote_path)
@@ -359,7 +366,7 @@ class NfsRepo(ArtifactRepo):
                 remote_base_path = self.artifact_base_path_of(metadata)
                 tmp_remote_path = self.artifact_path_of(metadata, '.tmp')
 
-                nfs.upload(local_path, f'{tmp_remote_path}{metadata.path_suffix}', allow_dir=True, progress_bar=True)
+                nfs.upload(local_path, tmp_remote_path, allow_dir=True, progress_bar=True)
                 nfs.rename(tmp_remote_base_path, remote_base_path)
 
             print('Uploading metadata...', file=sys.stderr)
@@ -391,22 +398,62 @@ class NfsRepo(ArtifactRepo):
                 yield metadata
 
     def download(self, metadata: ArtifactMetadata) -> Path:
-        tmp_local_path = LOCAL_REPO.artifact_base_path_of(metadata, '.tmp')
-        local_path = LOCAL_REPO.artifact_base_path_of(metadata)
-        remote_path = self.artifact_base_path_of(metadata)
+        tmp_local_base_path = LOCAL_REPO.artifact_base_path_of(metadata, '.tmp')
+        tmp_local_path = LOCAL_REPO.artifact_path_of(metadata, '.tmp')
+        local_base_path = LOCAL_REPO.artifact_base_path_of(metadata)
+        remote_path = self.artifact_path_of(metadata)
+        remote_base_path = self.artifact_base_path_of(metadata)
 
-        shutil.rmtree(tmp_local_path, ignore_errors=True)
-        shutil.rmtree(local_path, ignore_errors=True)
+        shutil.rmtree(tmp_local_base_path, ignore_errors=True)
+        shutil.rmtree(local_base_path, ignore_errors=True)
+
+        actual_hash = None
 
         with self._connected() as nfs:
-            if metadata.path_location:
-                local_path.mkdir(parents=True, exist_ok=True)
-                nfs.download(tmp_local_path / metadata.name, remote_path, progress_bar=True)
+            tmp_local_base_path.mkdir(parents=True, exist_ok=True)
+            if metadata.path_type == 'file' or metadata.path_type == 'dir':
+                if metadata.path_location:
+                    actual_hash = nfs.download(tmp_local_base_path / metadata.name, remote_base_path, progress_bar=True)
+                else:
+                    actual_hash = nfs.download(tmp_local_base_path, remote_base_path, progress_bar=True)
+            elif metadata.path_type == 'gz':
+                buffer = io.BytesIO()
+                hasher = hashlib.sha256(b'')
+
+                tmp_local_file_path = tmp_local_base_path / metadata.name
+                with open(tmp_local_file_path, 'wb') as output_file:
+                    with gzip.GzipFile(fileobj=buffer, mode='rb') as decompressed:
+                        # TODO: Stream chunks
+                        compressed_data = nfs.read(remote_path, progress_bar=True)
+                        hasher.update(compressed_data)
+                        buffer.write(compressed_data)
+                        buffer.seek(0)
+                        output_file.write(decompressed.read())
+
+                actual_hash = hasher.hexdigest()
+            elif metadata.path_type == 'tar.gz':
+                buffer = io.BytesIO()
+                hasher = hashlib.sha256(b'')
+
+                compressed_data = nfs.read(remote_path, progress_bar=True)
+                hasher.update(compressed_data)
+                buffer.write(compressed_data)
+                buffer.seek(0, io.SEEK_SET)
+
+                print('Extracting...', file=sys.stderr)
+                with tarfile.open(fileobj=buffer, mode='r:gz') as tar:
+                    tar.extractall(tmp_local_path)
+
+                actual_hash = hasher.hexdigest()
             else:
-                nfs.download(tmp_local_path, remote_path, progress_bar=True)
+                raise ValueError(f'Unknown artifact type: {metadata.path_type}')
+
+        if metadata.path_hash and actual_hash and metadata.path_hash != actual_hash:
+            raise ArtifactCorruptedError(f'Hash mismatch for {metadata.type}:{metadata.hash}: '
+                                         f'{metadata.path_hash} != {actual_hash}')
 
         LOCAL_REPO.generate_caches_for_artifact(metadata)
-        tmp_local_path.rename(local_path)
+        tmp_local_base_path.rename(local_base_path)
         return LOCAL_REPO.artifact_path_of(metadata)
 
     def download_metadata_for_type(self, artifact_type: str):
@@ -455,5 +502,6 @@ class NfsRepo(ArtifactRepo):
         if metadata.path_location:
             return metadata.path_location
         else:
-            return f'artifacts/{metadata.type.lower()}/{metadata.hash.lower()}{suffix}/{metadata.name}'
+            return f'artifacts/{metadata.type.lower()}/{metadata.hash.lower()}{suffix}/' \
+                   f'{metadata.name}{metadata.path_suffix}'
 

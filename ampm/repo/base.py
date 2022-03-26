@@ -162,6 +162,10 @@ class QueryNotFoundError(Exception):
         self.query = query
 
 
+class ArtifactCorruptedError(Exception):
+    pass
+
+
 class RepoGroup:
     def __init__(self, repos: Optional[List[ArtifactRepo]] = None, remote_uri: str = None):
         if repos is None:

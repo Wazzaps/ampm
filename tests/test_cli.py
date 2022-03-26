@@ -1,4 +1,5 @@
 import json
+import gzip
 import re
 import time
 import ampm.cli
@@ -9,10 +10,10 @@ from typing import Dict, Optional
 from click.testing import CliRunner
 
 
-def upload(local_path: str, artifact_type: str, remote_path: Optional[str] = None) -> str:
+def upload(local_path: str, artifact_type: str, compressed: bool, remote_path: Optional[str] = None) -> str:
     runner = CliRunner(mix_stderr=False)
 
-    args = ['upload', local_path, '--type', artifact_type, '--uncompressed']
+    args = ['upload', local_path, '--type', artifact_type, '--compressed' if compressed else '--uncompressed']
     if remote_path:
         args += ['--remote-path', remote_path]
 
@@ -45,70 +46,132 @@ def list_(identifier: str, attributes: Dict[str, str]) -> dict:
     return json.loads(result.stdout.strip())
 
 
-def test_upload_single_file_uncompressed(nfs_repo_path, clean_repos):
+@pytest.mark.parametrize('is_compressed', ['compressed', 'uncompressed'])
+def test_upload_single_file(nfs_repo_path, clean_repos, is_compressed):
     _ = clean_repos
-    artifact_hash = upload('tests/dummy_data/foobar.txt', artifact_type='foo')
+    artifact_hash = upload('tests/dummy_data/foobar.txt', artifact_type='foo', compressed=is_compressed == 'compressed')
     assert (nfs_repo_path / 'metadata' / 'foo' / f'{artifact_hash}.toml').is_file(), "Metadata file wasn't created"
-    assert (nfs_repo_path / 'artifacts' / 'foo' / artifact_hash / 'foobar.txt').is_file(), "Data file wasn't created"
-    assert (nfs_repo_path / 'artifacts' / 'foo' / artifact_hash / 'foobar.txt').read_bytes() == b'foo bar\n', \
-        "Data file has wrong contents"
+
+    if is_compressed == 'compressed':
+        assert (nfs_repo_path / 'artifacts' / 'foo' / artifact_hash / 'foobar.txt.gz').is_file(), \
+            "Data file wasn't created"
+        decompressed = gzip.decompress(
+            (nfs_repo_path / 'artifacts' / 'foo' / artifact_hash / 'foobar.txt.gz').read_bytes()
+        )
+        assert decompressed == b'foo bar\n', "Data file has wrong contents"
+    else:
+        assert (nfs_repo_path / 'artifacts' / 'foo' / artifact_hash / 'foobar.txt').is_file(), \
+            "Data file wasn't created"
+        assert (nfs_repo_path / 'artifacts' / 'foo' / artifact_hash / 'foobar.txt').read_bytes() == b'foo bar\n', \
+            "Data file has wrong contents"
 
 
-def test_upload_single_file_uncompressed_location(nfs_repo_path, clean_repos):
+@pytest.mark.parametrize('is_compressed', ['compressed', 'uncompressed'])
+def test_upload_single_file_location(nfs_repo_path, clean_repos, is_compressed):
     _ = clean_repos
-    artifact_hash = upload('tests/dummy_data/foobar.txt', artifact_type='foo', remote_path='/custom_dir/foobar.txt')
+    artifact_hash = upload(
+        'tests/dummy_data/foobar.txt',
+        artifact_type='foo',
+        remote_path='/custom_dir/foobar.txt' + ('.gz' if is_compressed == 'compressed' else ''),
+        compressed=is_compressed == 'compressed'
+    )
     assert (nfs_repo_path / 'metadata' / 'foo' / f'{artifact_hash}.toml').is_file(), "Metadata file wasn't created"
-    assert (nfs_repo_path / 'custom_dir' / 'foobar.txt').is_file(), "Data file wasn't created"
-    assert (nfs_repo_path / 'custom_dir' / 'foobar.txt').read_bytes() == b'foo bar\n', "Data file has wrong contents"
+    if is_compressed == 'compressed':
+        assert (nfs_repo_path / 'custom_dir' / 'foobar.txt.gz').is_file(), \
+            "Data file wasn't created"
+        decompressed = gzip.decompress(
+            (nfs_repo_path / 'custom_dir' / 'foobar.txt.gz').read_bytes()
+        )
+        assert decompressed == b'foo bar\n', "Data file has wrong contents"
+    else:
+        assert (nfs_repo_path / 'custom_dir' / 'foobar.txt').is_file(), \
+            "Data file wasn't created"
+        assert (nfs_repo_path / 'custom_dir' / 'foobar.txt').read_bytes() == b'foo bar\n', \
+            "Data file has wrong contents"
 
 
-def test_upload_dir_uncompressed(nfs_repo_path, clean_repos):
+@pytest.mark.parametrize('is_compressed', ['compressed', 'uncompressed'])
+def test_upload_dir(nfs_repo_path, clean_repos, is_compressed):
     _ = clean_repos
-    artifact_hash = upload('tests/dummy_data/foo_dir', artifact_type='foo')
+    artifact_hash = upload(
+        'tests/dummy_data/foo_dir',
+        artifact_type='foo',
+        compressed=is_compressed == 'compressed'
+    )
     assert (nfs_repo_path / 'metadata' / 'foo' / f'{artifact_hash}.toml').is_file(), \
         "Metadata file wasn't created"
-    assert (nfs_repo_path / 'artifacts' / 'foo' / artifact_hash).is_dir(), \
-        "Dir wasn't created"
-    assert (nfs_repo_path / 'artifacts' / 'foo' / artifact_hash / 'foo_dir' / 'hello.txt').is_file(), \
-        "File inside wasn't created"
-    assert (nfs_repo_path / 'artifacts' / 'foo' / artifact_hash / 'foo_dir' / 'nested' / 'boo.txt').is_file(), \
-        "File nested inside wasn't created"
-    assert (nfs_repo_path / 'artifacts' / 'foo' / artifact_hash / 'foo_dir' / 'nested' / 'boo.txt').read_bytes() \
-           == b"boo\n", "File nested has wrong contents"
+    if is_compressed == 'compressed':
+        assert (nfs_repo_path / 'artifacts' / 'foo' / artifact_hash / 'foo_dir.tar.gz').is_file(), \
+            "Archive wasn't created"
+    else:
+        assert (nfs_repo_path / 'artifacts' / 'foo' / artifact_hash).is_dir(), \
+            "Dir wasn't created"
+        assert (nfs_repo_path / 'artifacts' / 'foo' / artifact_hash / 'foo_dir' / 'hello.txt').is_file(), \
+            "File inside wasn't created"
+        assert (nfs_repo_path / 'artifacts' / 'foo' / artifact_hash / 'foo_dir' / 'nested' / 'boo.txt').is_file(), \
+            "File nested inside wasn't created"
+        assert (nfs_repo_path / 'artifacts' / 'foo' / artifact_hash / 'foo_dir' / 'nested' / 'boo.txt').read_bytes() \
+               == b"boo\n", "File nested has wrong contents"
 
 
-def test_upload_dir_uncompressed_location(nfs_repo_path, clean_repos):
+@pytest.mark.parametrize('is_compressed', ['compressed', 'uncompressed'])
+def test_upload_dir_location(nfs_repo_path, clean_repos, is_compressed):
     _ = clean_repos
-    artifact_hash = upload('tests/dummy_data/foo_dir', artifact_type='foo', remote_path='/custom_dir/foo_dir')
+    artifact_hash = upload(
+        'tests/dummy_data/foo_dir',
+        artifact_type='foo',
+        remote_path='/custom_dir/foo_dir' + ('.tar.gz' if is_compressed == 'compressed' else ''),
+        compressed=is_compressed == 'compressed'
+    )
     assert (nfs_repo_path / 'metadata' / 'foo' / f'{artifact_hash}.toml').is_file(), \
         "Metadata file wasn't created"
-    assert (nfs_repo_path / 'custom_dir' / 'foo_dir').is_dir(), \
-        "Dir wasn't created"
-    assert (nfs_repo_path / 'custom_dir' / 'foo_dir' / 'hello.txt').is_file(), \
-        "File inside wasn't created"
-    assert (nfs_repo_path / 'custom_dir' / 'foo_dir' / 'nested' / 'boo.txt').is_file(), \
-        "File nested inside wasn't created"
-    assert (nfs_repo_path / 'custom_dir' / 'foo_dir' / 'nested' / 'boo.txt').read_bytes() \
-           == b"boo\n", "File nested has wrong contents"
+    if is_compressed == 'compressed':
+        assert (nfs_repo_path / 'custom_dir' / 'foo_dir.tar.gz').is_file(), \
+            "Archive wasn't created"
+    else:
+        assert (nfs_repo_path / 'custom_dir' / 'foo_dir').is_dir(), \
+            "Dir wasn't created"
+        assert (nfs_repo_path / 'custom_dir' / 'foo_dir' / 'hello.txt').is_file(), \
+            "File inside wasn't created"
+        assert (nfs_repo_path / 'custom_dir' / 'foo_dir' / 'nested' / 'boo.txt').is_file(), \
+            "File nested inside wasn't created"
+        assert (nfs_repo_path / 'custom_dir' / 'foo_dir' / 'nested' / 'boo.txt').read_bytes() \
+               == b"boo\n", "File nested has wrong contents"
 
 
-def test_download_single_file_uncompressed(clean_repos):
+@pytest.mark.parametrize('is_compressed', ['compressed', 'uncompressed'])
+def test_download_single_file_uncompressed(clean_repos, is_compressed):
     _ = clean_repos
-    artifact_hash = upload('tests/dummy_data/foobar.txt', artifact_type='foo')
+    artifact_hash = upload(
+        'tests/dummy_data/foobar.txt',
+        artifact_type='foo',
+        compressed=is_compressed == 'compressed'
+    )
     artifact_path = download(f'foo:{artifact_hash}', {})
     assert artifact_path.read_bytes() == b"foo bar\n", "Downloaded file has wrong contents"
 
 
-def test_download_single_file_uncompressed_location(clean_repos):
+@pytest.mark.parametrize('is_compressed', ['compressed', 'uncompressed'])
+def test_download_single_file_uncompressed_location(clean_repos, is_compressed):
     _ = clean_repos
-    artifact_hash = upload('tests/dummy_data/foobar.txt', artifact_type='foo', remote_path='/custom_dir/foobar.txt')
+    artifact_hash = upload(
+        'tests/dummy_data/foobar.txt',
+        artifact_type='foo',
+        remote_path='/custom_dir/foobar.txt',
+        compressed=is_compressed == 'compressed'
+    )
     artifact_path = download(f'foo:{artifact_hash}', {})
     assert artifact_path.read_bytes() == b"foo bar\n", "Downloaded file has wrong contents"
 
 
-def test_download_dir_uncompressed(clean_repos):
+@pytest.mark.parametrize('is_compressed', ['compressed', 'uncompressed'])
+def test_download_dir_uncompressed(clean_repos, is_compressed):
     _ = clean_repos
-    artifact_hash = upload('tests/dummy_data/foo_dir', artifact_type='foo')
+    artifact_hash = upload(
+        'tests/dummy_data/foo_dir',
+        artifact_type='foo',
+        compressed=is_compressed == 'compressed'
+    )
     artifact_path = download(f'foo:{artifact_hash}', {})
     assert (artifact_path / 'hello.txt').is_file(), "File inside wasn't created"
     assert (artifact_path / 'nested' / 'boo.txt').is_file(), "File nested inside wasn't created"
@@ -123,7 +186,11 @@ def test_stress(clean_repos):
 
     t = time.time()
     for i in range(COUNT):
-        artifact_hashes.append(upload('tests/dummy_data/foobar.txt', artifact_type='foo'))
+        artifact_hashes.append(upload(
+            'tests/dummy_data/foobar.txt',
+            artifact_type='foo',
+            compressed=False
+        ))
     upload_duration = time.time() - t
     print(f'Uploaded {COUNT} artifacts in {upload_duration} seconds')
     assert upload_duration < 10, f"Uploading {COUNT} artifacts took too long"
