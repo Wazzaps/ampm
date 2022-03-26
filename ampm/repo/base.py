@@ -12,7 +12,7 @@ import toml
 ARTIFACT_TYPES = ['file', 'dir', 'tar.gz', 'gz']
 
 LOCAL_REPO_URI = 'file:///var/ampm'
-REMOTE_REPO_URI = 'nfs://127.0.0.1/mnt/myshareddir'
+REMOTE_REPO_URI = Path('/opt/ampm/repo_uri').read_text().strip()
 
 
 def hash_buffer(buffer) -> str:

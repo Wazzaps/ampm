@@ -2,11 +2,7 @@
 
 ## Supported Versions
 
-These versions will receive security updates:
-
-| Version | Supported          |
-|---------|--------------------|
-| 1.1.x   | :white_check_mark: |
+Only the latest minor version will receive security updates
 
 ## Reporting a Vulnerability
 
