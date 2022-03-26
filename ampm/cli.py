@@ -5,7 +5,6 @@ import gzip
 import hashlib
 import json
 import os
-import random
 import sys
 import tarfile
 import tqdm
@@ -18,7 +17,7 @@ from ampm.repo.base import ArtifactQuery, AmbiguousQueryError, RepoGroup, QueryN
     ArtifactMetadata, ArtifactRepo, REMOTE_REPO_URI, AmbiguousComparisonError
 from ampm.repo.local import LOCAL_REPO
 from ampm import __version__
-from ampm.utils import _calc_dir_size
+from ampm.utils import _calc_dir_size, randbytes
 
 
 class OrderedGroup(click.Group):
@@ -252,7 +251,7 @@ def upload(
                 # TODO: Streaming implementation
 
                 # Compress it
-                tmp_file = Path(f'/tmp/ampm_tmp_{random.randbytes(8).hex()}')
+                tmp_file = Path(f'/tmp/ampm_tmp_{randbytes(8).hex()}')
                 total_size = ceil(_calc_dir_size(local_path) / 1024)
                 bar = tqdm.tqdm(
                     total=total_size,
@@ -280,7 +279,7 @@ def upload(
                 artifact_type = 'gz'
 
                 # Compress it
-                tmp_file = Path(f'/tmp/ampm_tmp_{random.randbytes(8).hex()}')
+                tmp_file = Path(f'/tmp/ampm_tmp_{randbytes(8).hex()}')
                 total_size = ceil(local_path.stat().st_size / 1024)
                 bar = tqdm.tqdm(
                     total=total_size,

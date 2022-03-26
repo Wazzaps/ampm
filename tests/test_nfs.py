@@ -2,13 +2,14 @@ import random
 import shutil
 from pathlib import Path
 from ampm.repo.nfs import NfsConnection, NfsRepo
+from ampm.utils import randbytes
 
 
 def test_operations(clean_repos, nfs_repo: NfsRepo, nfs_repo_path: Path):
     _ = clean_repos
 
     with NfsConnection.connect(nfs_repo.host, nfs_repo.remote_path) as nfs:
-        ident = f'ampm_tests_{random.randbytes(8).hex()}'
+        ident = f'ampm_tests_{randbytes(8).hex()}'
         local_path = Path(f'/tmp/{ident}')
         remote_path = Path(f'nfs_tests')
         try:

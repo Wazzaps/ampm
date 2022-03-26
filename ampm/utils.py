@@ -29,3 +29,14 @@ def _hash_local_file(local_path: Path) -> str:
         hasher.update(chunk)
 
     return hasher.hexdigest()
+
+
+def randbytes(length: int) -> bytes:
+    """
+    Generate a random bytes object.
+
+    :param length: Length of the random bytes object.
+    :return: Random bytes object.
+    """
+    import random
+    return bytes(random.getrandbits(8) for _ in range(length))

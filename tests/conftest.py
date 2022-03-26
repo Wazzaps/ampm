@@ -1,4 +1,3 @@
-import random
 import shutil
 import subprocess
 import time
@@ -7,6 +6,7 @@ import pytest
 from pathlib import Path
 from ampm.repo.local import LOCAL_REPO
 from ampm.repo.nfs import NfsRepo
+from ampm.utils import randbytes
 
 
 @pytest.fixture()
@@ -57,7 +57,7 @@ def nfs_server(tmp_path_factory: "TempPathFactory"):
 
 @pytest.fixture()
 def nfs_repo(nfs_server) -> NfsRepo:
-    random_id = random.randbytes(8).hex()
+    random_id = randbytes(8).hex()
     nfs_root = nfs_server["root"] / random_id
     nfs_root.mkdir()
     return NfsRepo.from_uri_part(f'{nfs_server["host"]}{nfs_root}')
