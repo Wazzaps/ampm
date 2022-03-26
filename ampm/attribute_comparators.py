@@ -102,7 +102,7 @@ class SemverComparator(Comparator):
     @staticmethod
     def compare(param, a: str, b: str) -> int:
         sort_order, _, is_stable = param.partition(',')
-        result = semver.compare(a.lstrip('v'), b.lstrip('v'))
+        result = semver.VersionInfo.parse(a.lstrip('v')).compare(semver.VersionInfo.parse(b.lstrip('v')))
 
         if sort_order == 'newest' or (sort_order and sort_order[0] in '^~><'):
             return -result

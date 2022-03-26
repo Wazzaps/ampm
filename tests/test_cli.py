@@ -10,12 +10,16 @@ from typing import Dict, Optional
 from click.testing import CliRunner
 
 
-def upload(local_path: str, artifact_type: str, compressed: bool, remote_path: Optional[str] = None) -> str:
+def upload(local_path: str, artifact_type: str, compressed: bool, attributes=None, remote_path: Optional[str] = None) -> str:
+    if attributes is None:
+        attributes = {}
     runner = CliRunner(mix_stderr=False)
 
     args = ['upload', local_path, '--type', artifact_type, '--compressed' if compressed else '--uncompressed']
     if remote_path:
         args += ['--remote-path', remote_path]
+    for k, v in attributes.items():
+        args += ['--attr', f'{k}={v}']
 
     result = runner.invoke(ampm.cli.cli, args)
     formatted_output = f'== STDERR ==\n{result.stderr}\n\n== STDOUT ==\n{result.stdout}'
@@ -140,7 +144,7 @@ def test_upload_dir_location(nfs_repo_path, clean_repos, is_compressed):
 
 
 @pytest.mark.parametrize('is_compressed', ['compressed', 'uncompressed'])
-def test_download_single_file_uncompressed(clean_repos, is_compressed):
+def test_download_single_file(clean_repos, is_compressed):
     _ = clean_repos
     artifact_hash = upload(
         'tests/dummy_data/foobar.txt',
@@ -152,7 +156,7 @@ def test_download_single_file_uncompressed(clean_repos, is_compressed):
 
 
 @pytest.mark.parametrize('is_compressed', ['compressed', 'uncompressed'])
-def test_download_single_file_uncompressed_location(clean_repos, is_compressed):
+def test_download_single_file_location(clean_repos, is_compressed):
     _ = clean_repos
     artifact_hash = upload(
         'tests/dummy_data/foobar.txt',
@@ -165,7 +169,7 @@ def test_download_single_file_uncompressed_location(clean_repos, is_compressed):
 
 
 @pytest.mark.parametrize('is_compressed', ['compressed', 'uncompressed'])
-def test_download_dir_uncompressed(clean_repos, is_compressed):
+def test_download_dir(clean_repos, is_compressed):
     _ = clean_repos
     artifact_hash = upload(
         'tests/dummy_data/foo_dir',
@@ -176,6 +180,98 @@ def test_download_dir_uncompressed(clean_repos, is_compressed):
     assert (artifact_path / 'hello.txt').is_file(), "File inside wasn't created"
     assert (artifact_path / 'nested' / 'boo.txt').is_file(), "File nested inside wasn't created"
     assert (artifact_path / 'nested' / 'boo.txt').read_bytes() == b"boo\n", "File nested has wrong contents"
+
+
+@pytest.mark.parametrize('filter_type', ['num', 'date', 'semver'])
+def test_attr_filters(clean_repos, filter_type):
+    _ = clean_repos
+
+    sample_data = {
+        'num': ['1', '2', '3', '4', '5'],
+        'date': ['2020-01-01', '2020-01-02', '2020-01-03', '2020-01-04', '2020-01-05'],
+        'semver': ['1.0.0', '1.0.1', '1.0.1-alpha', '1.1.0', '1.2.0', '1.3.0-alpha', '2.0.0'],
+    }
+
+    sample_queries = {
+        'num': {
+            '@num:biggest': '5',
+            '@num:smallest': '1',
+        },
+        'date': {
+            '@date:latest': '2020-01-05',
+            '@date:earliest': '2020-01-01',
+        },
+        'semver': {
+            '@semver:newest': '2.0.0',
+            '@semver:oldest': '1.0.0',
+            '@semver:^1.0.0': '1.2.0',
+            '@semver:~1.0.0': '1.0.1',
+            '@semver:^1.2.0,prerelease': '1.3.0-alpha',
+            '@semver:<1.0.1,prerelease': '1.0.1-alpha',
+            '@semver:^2.0.0': '2.0.0',
+            '@semver:>1.0.0': '2.0.0',
+        },
+    }
+
+    artifact_hashes = []
+    for data in sample_data[filter_type]:
+        artifact_hashes.append(upload(
+            'tests/dummy_data/foobar.txt',
+            artifact_type='foo',
+            compressed=False,
+            attributes={'attr': data}
+        ))
+
+    def do_test(query):
+        return sorted(a['attributes']['attr'] for a in list_('foo', {'attr': query} if query else {}))
+
+    artifacts = do_test(None)
+    assert artifacts == sample_data[filter_type], "Wrong artifacts with no filter"
+
+    artifacts = do_test(sample_data[filter_type][0])
+    assert artifacts == [sample_data[filter_type][0]], "Wrong artifacts for exact match"
+
+    for query, expected in sample_queries[filter_type].items():
+        artifacts = do_test(query)
+        assert artifacts == [expected], f"Wrong artifacts for {query}"
+
+
+def test_attr_filters_ambiguous(clean_repos):
+    _ = clean_repos
+
+    artifact_hashes = []
+    for i in range(5):
+        artifact_hashes.append(upload(
+            'tests/dummy_data/foobar.txt',
+            artifact_type='foo',
+            compressed=False,
+            attributes={'a': f'{i}', 'b': f'{i % 2}'}
+        ))
+
+    assert len(list_('foo', {'a': '0'})) == 1, "Wrong number of artifacts with exact match of a == 0"
+    assert len(list_('foo', {'a': '1'})) == 1, "Wrong number of artifacts with exact match of a == 1"
+
+    assert len(list_('foo', {'b': '0'})) == 3, "Wrong number of artifacts with exact match of b == 0"
+    assert len(list_('foo', {'b': '1'})) == 2, "Wrong number of artifacts with exact match of b == 1"
+
+    with pytest.raises(AssertionError):
+        list_('foo', {'a': '@num:biggest'})
+
+    with pytest.raises(AssertionError):
+        list_('foo', {'a': '@ignore'})
+
+    with pytest.raises(AssertionError):
+        list_('foo', {'@any': '@ignore'})
+
+    assert len(list_('foo', {'a': '@num:biggest', 'b': '1'})) == 1, "Wrong number of artifacts with `biggest` on a"
+    assert len(list_('foo', {'a': '@num:biggest', 'b': '1'})) == 1, "Wrong number of artifacts with `biggest` on a"
+    assert len(list_('foo', {'a': '@num:smallest', 'b': '1'})) == 1, "Wrong number of artifacts with `smallest` on a"
+    assert len(list_('foo', {'a': '1', 'b': '@num:biggest'})) == 1, "Wrong number of artifacts with `biggest` on b"
+    assert len(list_('foo', {'a': '1', 'b': '@num:smallest'})) == 1, "Wrong number of artifacts with `smallest` on b"
+    assert len(list_('foo', {'a': '@num:biggest', 'b': '@ignore'})) == 1, \
+        "Wrong number of artifacts with `biggest` on a and `ignore` on b"
+    assert len(list_('foo', {'a': '@num:biggest', '@any': '@ignore'})) == 1, \
+        "Wrong number of artifacts with `biggest` on a and `ignore` on `any`"
 
 
 def test_stress(clean_repos):
