@@ -20,6 +20,12 @@ ampm upload foobar/ --type='foobar' --uncompressed
 # Upload to custom location
 ampm upload foobar.txt --type='foobar' --remote-path='/foobar.txt' --uncompressed
 
+# Upload file to default location, with gz compression
+ampm upload foobar.txt --type='foobar'
+
+# Upload file to default location, in tar.gz archive
+ampm upload foobar/ --type='foobar'
+
 # Upload to custom location manually then register artifact
 cp foobar.txt /mnt/myshareddir/foobar.txt && ampm upload --type='foobar' --name='foobar.txt' --remote-path='/foobar.txt'
 
@@ -57,15 +63,17 @@ ampm --server='nfs://1.2.3.4/some/repo' get foobar:mbf5qxqli76zx7btc5n7fkq47tjs6
 ## TODO:
 
 ```shell
-# Upload file to default location, gz compression
-ampm upload foobar.txt --type='foobar'
-
-# Upload file to default location, in tar.gz archive
-ampm upload foobar/ --type='foobar'
-
-# Same but gets newest version if it's the only non-unique attribute
+# Gets newest version if it's the only non-unique attribute
 ampm get foobar -a arch=x86_64 -a version=@semver:^1.0
+
+# Gets latest release if it's the only non-unique attribute
 ampm get foobar -a arch=x86_64 -a pubdate=@date:latest
+
+# Gets latest release if it's the only non-unique attribute, except for `irrelevant_attr`, which is ignored
+ampm get foobar -a arch=x86_64 -a pubdate=@date:latest -a irrelevant_attr=@ignore
+
+# Gets latest release, ignoring attributes other than `arch`
+ampm get foobar -a arch=x86_64 -a pubdate=@date:latest -a @any=@ignore
 ```
 
 ## Hash calculation algorithm
