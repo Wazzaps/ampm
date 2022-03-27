@@ -12,4 +12,4 @@ else
 fi
 
 # Remove temporary files
-rm /tmp/ampm_tmp_*
+rm -f /tmp/ampm_tmp_*
