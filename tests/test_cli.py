@@ -93,26 +93,28 @@ def test_upload_single_file(nfs_repo_path, clean_repos, upload, is_compressed):
 
 
 @pytest.mark.parametrize('is_compressed', ['compressed', 'uncompressed'])
-def test_upload_single_file_location(nfs_repo_path, clean_repos, upload, is_compressed):
+def test_upload_single_file_location(nfs_repo_path, nfs_mount_path, clean_repos, upload, is_compressed):
     _ = clean_repos
     artifact_hash = upload(
         'tests/dummy_data/foobar.txt',
         artifact_type='foo',
-        remote_path='/custom_dir/foobar.txt' + ('.gz' if is_compressed == 'compressed' else ''),
+        remote_path=str(
+            nfs_mount_path / 'custom_dir' / ('foobar.txt' + ('.gz' if is_compressed == 'compressed' else ''))
+        ),
         compressed=is_compressed == 'compressed'
     )
     assert (nfs_repo_path / 'metadata' / 'foo' / f'{artifact_hash}.toml').is_file(), "Metadata file wasn't created"
     if is_compressed == 'compressed':
-        assert (nfs_repo_path / 'custom_dir' / 'foobar.txt.gz').is_file(), \
+        assert (nfs_mount_path / 'custom_dir' / 'foobar.txt.gz').is_file(), \
             "Data file wasn't created"
         decompressed = gzip.decompress(
-            (nfs_repo_path / 'custom_dir' / 'foobar.txt.gz').read_bytes()
+            (nfs_mount_path / 'custom_dir' / 'foobar.txt.gz').read_bytes()
         )
         assert decompressed == b'foo bar\n', "Data file has wrong contents"
     else:
-        assert (nfs_repo_path / 'custom_dir' / 'foobar.txt').is_file(), \
+        assert (nfs_mount_path / 'custom_dir' / 'foobar.txt').is_file(), \
             "Data file wasn't created"
-        assert (nfs_repo_path / 'custom_dir' / 'foobar.txt').read_bytes() == b'foo bar\n', \
+        assert (nfs_mount_path / 'custom_dir' / 'foobar.txt').read_bytes() == b'foo bar\n', \
             "Data file has wrong contents"
 
 
@@ -141,27 +143,29 @@ def test_upload_dir(nfs_repo_path, clean_repos, upload, is_compressed):
 
 
 @pytest.mark.parametrize('is_compressed', ['compressed', 'uncompressed'])
-def test_upload_dir_location(nfs_repo_path, clean_repos, upload, is_compressed):
+def test_upload_dir_location(nfs_repo_path, nfs_mount_path, clean_repos, upload, is_compressed):
     _ = clean_repos
     artifact_hash = upload(
         'tests/dummy_data/foo_dir',
         artifact_type='foo',
-        remote_path='/custom_dir/foo_dir' + ('.tar.gz' if is_compressed == 'compressed' else ''),
+        remote_path=str(
+            nfs_mount_path / 'custom_dir' / ('foo_dir' + ('.tar.gz' if is_compressed == 'compressed' else ''))
+        ),
         compressed=is_compressed == 'compressed'
     )
     assert (nfs_repo_path / 'metadata' / 'foo' / f'{artifact_hash}.toml').is_file(), \
         "Metadata file wasn't created"
     if is_compressed == 'compressed':
-        assert (nfs_repo_path / 'custom_dir' / 'foo_dir.tar.gz').is_file(), \
+        assert (nfs_mount_path / 'custom_dir' / 'foo_dir.tar.gz').is_file(), \
             "Archive wasn't created"
     else:
-        assert (nfs_repo_path / 'custom_dir' / 'foo_dir').is_dir(), \
+        assert (nfs_mount_path / 'custom_dir' / 'foo_dir').is_dir(), \
             "Dir wasn't created"
-        assert (nfs_repo_path / 'custom_dir' / 'foo_dir' / 'hello.txt').is_file(), \
+        assert (nfs_mount_path / 'custom_dir' / 'foo_dir' / 'hello.txt').is_file(), \
             "File inside wasn't created"
-        assert (nfs_repo_path / 'custom_dir' / 'foo_dir' / 'nested' / 'boo.txt').is_file(), \
+        assert (nfs_mount_path / 'custom_dir' / 'foo_dir' / 'nested' / 'boo.txt').is_file(), \
             "File nested inside wasn't created"
-        assert (nfs_repo_path / 'custom_dir' / 'foo_dir' / 'nested' / 'boo.txt').read_bytes() \
+        assert (nfs_mount_path / 'custom_dir' / 'foo_dir' / 'nested' / 'boo.txt').read_bytes() \
                == b"boo\n", "File nested has wrong contents"
 
 
@@ -178,12 +182,12 @@ def test_download_single_file(clean_repos, upload, download, is_compressed):
 
 
 @pytest.mark.parametrize('is_compressed', ['compressed', 'uncompressed'])
-def test_download_single_file_location(clean_repos, upload, download, is_compressed):
+def test_download_single_file_location(nfs_mount_path, clean_repos, upload, download, is_compressed):
     _ = clean_repos
     artifact_hash = upload(
         'tests/dummy_data/foobar.txt',
         artifact_type='foo',
-        remote_path='/custom_dir/foobar.txt',
+        remote_path=str(nfs_mount_path / 'custom_dir' / 'foobar.txt'),
         compressed=is_compressed == 'compressed'
     )
     artifact_path = download(f'foo:{artifact_hash}', {})

@@ -6,23 +6,23 @@ on:
   pull_request:
 
 jobs:
-  build-linux:
-    name: Build linux binaries
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v2
-      - name: Build
-        run: ./build.sh
-      - name: Upload results
-        uses: actions/upload-artifact@v3
-        with:
-          name: ampm-linux-binaries
-          if-no-files-found: error
-          path: |
-            dist/ampm.tar.gz
-            dist/get_ampm.sh
+#  build-linux:
+#    name: Build linux binaries
+#    runs-on: ubuntu-latest
+#    timeout-minutes: 10
+#    steps:
+#      - name: Checkout code
+#        uses: actions/checkout@v2
+#      - name: Build
+#        run: ./build.sh
+#      - name: Upload results
+#        uses: actions/upload-artifact@v3
+#        with:
+#          name: ampm-linux-binaries
+#          if-no-files-found: error
+#          path: |
+#            dist/ampm.tar.gz
+#            dist/get_ampm.sh
   test-linux:
     name: Test linux binaries
     runs-on: ubuntu-latest

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-REMOTE_REPO="nfs://127.0.0.1/mnt/myshareddir"
+REMOTE_REPO="nfs://127.0.0.1/mnt/myshareddir#ampm_repo"
 
 if [ "$(id -u)" -ne 0 ]; then
     echo 'This script must be run as root'

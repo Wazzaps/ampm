@@ -333,15 +333,16 @@ class NfsConnection:
 
 
 class NfsRepo(ArtifactRepo):
-    def __init__(self, host: str, remote_path: str):
+    def __init__(self, host: str, mount_path: str, repo_path: str):
         self.host = host
-        self.remote_path = remote_path
+        self.mount_path = mount_path
+        self.repo_path = repo_path
         self.connection: Optional[NfsConnection] = None
 
     @contextlib.contextmanager
     def _connected(self) -> ContextManager["NfsConnection"]:
         if self.connection is None:
-            with NfsConnection.connect(self.host, self.remote_path) as nfs:
+            with NfsConnection.connect(self.host, self.mount_path) as nfs:
                 self.connection = nfs
                 try:
                     yield nfs
@@ -352,11 +353,12 @@ class NfsRepo(ArtifactRepo):
 
     @staticmethod
     def from_uri_part(uri_part: str) -> "NfsRepo":
-        host, remote_path = uri_part.split("/", 1)
-        return NfsRepo(host, '/' + remote_path)
+        uri_part, repo_path = uri_part.split("#", 1)
+        host, mount_path = uri_part.split("/", 1)
+        return NfsRepo(host, '/' + mount_path.strip('/'), repo_path.strip('/'))
 
     def into_uri(self) -> str:
-        return f"nfs://{self.host}/{self.remote_path.lstrip('/')}"
+        return f"nfs://{self.host}/{self.mount_path.lstrip('/')}#{self.repo_path}"
 
     def upload(self, metadata: ArtifactMetadata, local_path: Optional[Path]):
         assert metadata.path_type in ARTIFACT_TYPES, f'Invalid artifact path type: {metadata.path_type}'
@@ -489,22 +491,21 @@ class NfsRepo(ArtifactRepo):
                 hasher.update(chunk)
             return hasher.hexdigest()
 
-    @staticmethod
-    def metadata_path_of(artifact_type: str, artifact_hash: str, suffix='.toml') -> str:
-        return f'metadata/{artifact_type}/{artifact_hash or ""}{suffix}'
+    def metadata_path_of(self, artifact_type: str, artifact_hash: str, suffix='.toml') -> str:
+        return f'{self.repo_path}/metadata/{artifact_type}/{artifact_hash or ""}{suffix}'
 
-    @staticmethod
-    def artifact_base_path_of(metadata: ArtifactMetadata, suffix='') -> str:
+    def artifact_base_path_of(self, metadata: ArtifactMetadata, suffix='') -> str:
         if metadata.path_location:
-            return metadata.path_location
+            assert metadata.path_location.startswith(self.mount_path)
+            return metadata.path_location[len(self.mount_path):].lstrip('/')
         else:
-            return f'artifacts/{metadata.type.lower()}/{metadata.hash.lower()}{suffix}'
+            return f'{self.repo_path}/artifacts/{metadata.type.lower()}/{metadata.hash.lower()}{suffix}'
 
-    @staticmethod
-    def artifact_path_of(metadata: ArtifactMetadata, suffix='') -> str:
+    def artifact_path_of(self, metadata: ArtifactMetadata, suffix='') -> str:
         if metadata.path_location:
-            return metadata.path_location
+            assert metadata.path_location.startswith(self.mount_path)
+            return metadata.path_location[len(self.mount_path):].lstrip('/')
         else:
-            return f'artifacts/{metadata.type.lower()}/{metadata.hash.lower()}{suffix}/' \
+            return f'{self.repo_path}/artifacts/{metadata.type.lower()}/{metadata.hash.lower()}{suffix}/' \
                    f'{metadata.name}{metadata.path_suffix}'
 

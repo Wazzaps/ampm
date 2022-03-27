@@ -11,7 +11,12 @@ from ampm.utils import randbytes
 
 @pytest.fixture()
 def nfs_repo_path(nfs_repo) -> Path:
-    return Path(nfs_repo.remote_path)
+    return Path(nfs_repo.mount_path) / nfs_repo.repo_path
+
+
+@pytest.fixture()
+def nfs_mount_path(nfs_repo) -> Path:
+    return Path(nfs_repo.mount_path)
 
 
 @pytest.fixture()
@@ -60,5 +65,5 @@ def nfs_repo(nfs_server) -> NfsRepo:
     random_id = randbytes(8).hex()
     nfs_root = nfs_server["root"] / random_id
     nfs_root.mkdir()
-    return NfsRepo.from_uri_part(f'{nfs_server["host"]}{nfs_root}')
+    return NfsRepo.from_uri_part(f'{nfs_server["host"]}{nfs_root}#repo')
 
