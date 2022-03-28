@@ -9,17 +9,21 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 echo 'Downloading ampm...'
-mkdir -p /opt/ampm
-cd /opt/ampm
+mkdir -p /opt/ampm.tmp
+cd /opt/ampm.tmp
 curl --progress-bar -fsSL https://github.com/Wazzaps/ampm/releases/latest/download/ampm.tar.gz | tar xz
 
 echo ''
-echo 'Adding ampm launcher to /usr/local/bin/...'
-install /opt/ampm/ampm.sh /usr/local/bin/ampm
+echo "Configuring remote repo to be '$REMOTE_REPO'..."
+echo "$REMOTE_REPO" > /opt/ampm.tmp/repo_uri
 
 echo ''
-echo "Configuring remote repo to be '$REMOTE_REPO'..."
-echo "$REMOTE_REPO" > /opt/ampm/repo_uri
+echo 'Adding ampm launcher to /usr/local/bin/...'
+install /opt/ampm.tmp/ampm.sh /usr/local/bin/ampm
+
+# Commit changes
+rm -rf /opt/ampm
+mv /opt/ampm.tmp /etc/ampm
 
 echo ''
 echo 'Done! Try running `ampm --help` to see what you can do with ampm.'
