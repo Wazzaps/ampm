@@ -23,7 +23,7 @@ install /opt/ampm.tmp/ampm.sh /usr/local/bin/ampm
 
 # Commit changes
 rm -rf /opt/ampm
-mv /opt/ampm.tmp /etc/ampm
+mv /opt/ampm.tmp /opt/ampm
 
 echo ''
 echo 'Done! Try running `ampm --help` to see what you can do with ampm.'
