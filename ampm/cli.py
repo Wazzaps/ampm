@@ -239,7 +239,7 @@ def upload(
 
     remote_repo = ArtifactRepo.by_uri(ctx.obj['server'])
 
-    # TODO: Remove tmp files
+    tmp_file_to_remove = None
 
     if local_path is not None:
         name = name or local_path.name
@@ -250,6 +250,7 @@ def upload(
 
                 # Compress it
                 tmp_file = Path(f'/tmp/ampm_tmp_{randbytes(8).hex()}')
+                tmp_file_to_remove = tmp_file
                 total_size = ceil(_calc_dir_size(local_path) / 1024)
                 bar = tqdm.tqdm(
                     total=total_size,
@@ -278,6 +279,7 @@ def upload(
 
                 # Compress it
                 tmp_file = Path(f'/tmp/ampm_tmp_{randbytes(8).hex()}')
+                tmp_file_to_remove = tmp_file
                 total_size = ceil(local_path.stat().st_size / 1024)
                 bar = tqdm.tqdm(
                     total=total_size,
@@ -327,6 +329,9 @@ def upload(
     remote_repo.upload(meta, local_path)
 
     print(f'{meta.type}:{meta.hash}')
+
+    if tmp_file_to_remove is not None:
+        tmp_file_to_remove.unlink(missing_ok=True)
 
 
 @cli.command()
