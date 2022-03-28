@@ -1,12 +1,11 @@
 import contextlib
-import gzip
 import hashlib
-import io
 import os
+import subprocess
 import sys
 import re
 import shutil
-import tarfile
+import threading
 from math import ceil
 from pathlib import Path
 from typing import List, Iterable, ContextManager, Optional
@@ -422,32 +421,48 @@ class NfsRepo(ArtifactRepo):
                 else:
                     actual_hash = nfs.download(tmp_local_base_path, remote_base_path, progress_bar=True)
             elif metadata.path_type == 'gz':
-                buffer = io.BytesIO()
+                decompressor = subprocess.Popen(['gzip', '-d'], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
                 hasher = hashlib.sha256(b'')
 
-                tmp_local_file_path = tmp_local_base_path / metadata.name
-                with open(tmp_local_file_path, 'wb') as output_file:
-                    with gzip.GzipFile(fileobj=buffer, mode='rb') as decompressed:
-                        # TODO: Stream chunks
-                        compressed_data = nfs.read(remote_path, progress_bar=True)
-                        hasher.update(compressed_data)
-                        buffer.write(compressed_data)
-                        buffer.seek(0)
-                        output_file.write(decompressed.read())
+                def out_reader(tmp_local_file_path):
+                    with open(tmp_local_file_path, 'wb') as output_file:
+                        while True:
+                            chunk = decompressor.stdout.read(1024 * 1024)
+                            if len(chunk):
+                                output_file.write(chunk)
+                            else:
+                                break
+
+                def in_writer():
+                    for chunk in nfs.read_stream(remote_path, progress_bar=True):
+                        decompressor.stdin.write(chunk)
+                        hasher.update(chunk)
+                    decompressor.stdin.close()
+
+                out_reader_thread = threading.Thread(target=out_reader, args=((tmp_local_base_path / metadata.name),))
+                in_writer_thread = threading.Thread(target=in_writer)
+                out_reader_thread.start()
+                in_writer_thread.start()
+
+                out_reader_thread.join()
+                in_writer_thread.join()
 
                 actual_hash = hasher.hexdigest()
             elif metadata.path_type == 'tar.gz':
-                buffer = io.BytesIO()
+                tmp_local_path.mkdir(parents=True)
+                decompressor = subprocess.Popen(
+                    ['tar', 'xz'],
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    cwd=str(tmp_local_path),
+                )
                 hasher = hashlib.sha256(b'')
 
-                compressed_data = nfs.read(remote_path, progress_bar=True)
-                hasher.update(compressed_data)
-                buffer.write(compressed_data)
-                buffer.seek(0, io.SEEK_SET)
-
-                print('Extracting...', file=sys.stderr)
-                with tarfile.open(fileobj=buffer, mode='r:gz') as tar:
-                    tar.extractall(tmp_local_path)
+                for chunk in nfs.read_stream(remote_path, progress_bar=True):
+                    decompressor.stdin.write(chunk)
+                    hasher.update(chunk)
+                decompressor.stdin.close()
+                decompressor.wait()
 
                 actual_hash = hasher.hexdigest()
             else:

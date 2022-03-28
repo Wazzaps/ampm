@@ -17,7 +17,7 @@ from ampm.repo.base import ArtifactQuery, AmbiguousQueryError, RepoGroup, QueryN
     ArtifactMetadata, ArtifactRepo, REMOTE_REPO_URI, AmbiguousComparisonError
 from ampm.repo.local import LOCAL_REPO
 from ampm import __version__
-from ampm.utils import _calc_dir_size, randbytes
+from ampm.utils import _calc_dir_size, randbytes, hash_local_file
 
 
 class OrderedGroup(click.Group):
@@ -248,8 +248,6 @@ def upload(
             if compressed:
                 artifact_type = 'tar.gz'
 
-                # TODO: Streaming implementation
-
                 # Compress it
                 tmp_file = Path(f'/tmp/ampm_tmp_{randbytes(8).hex()}')
                 total_size = ceil(_calc_dir_size(local_path) / 1024)
@@ -269,7 +267,7 @@ def upload(
                             elif path.is_dir():
                                 tar.add(path, arcname=path.relative_to(local_path), recursive=False)
 
-                artifact_hash = hashlib.sha256(tmp_file.read_bytes()).hexdigest()
+                artifact_hash = hash_local_file(tmp_file)
                 bar.close()
                 local_path = tmp_file
             else:
@@ -297,14 +295,12 @@ def upload(
                             bar.update(min(1024, size_left))
                             size_left -= 1024
 
-                # TODO: Streaming implementation
-                artifact_hash = hashlib.sha256(tmp_file.read_bytes()).hexdigest()
+                artifact_hash = hash_local_file(tmp_file)
                 bar.close()
                 local_path = tmp_file
             else:
                 artifact_type = 'file'
-                # TODO: Streaming implementation
-                artifact_hash = hashlib.sha256(local_path.read_bytes()).hexdigest()
+                artifact_hash = hash_local_file(local_path)
         else:
             raise click.BadParameter(f'Unsupported file type: {local_path} ({local_path.stat().st_type})')
     else:

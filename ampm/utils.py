@@ -18,7 +18,7 @@ def _calc_dir_size(path: Path) -> int:
     return total_size
 
 
-def _hash_local_file(local_path: Path) -> str:
+def hash_local_file(local_path: Path) -> str:
     hasher = hashlib.sha256(b'')
     fd = local_path.open('rb')
 
