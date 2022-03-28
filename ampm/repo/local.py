@@ -183,7 +183,7 @@ class LocalRepo(ArtifactRepo):
         return '\n'.join(
             f'export {shlex.quote(k)}={shlex.quote(v.replace("${BASE_DIR}", str(base_dir)))}'
             for k, v in metadata.env.items()
-        )
+        ) + '\n'
 
 
 LOCAL_REPO = LocalRepo(Path('/var/ampm'))

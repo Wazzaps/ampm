@@ -193,7 +193,7 @@ def env(ctx: click.Context, identifier: str, attr: Dict[str, str]):
 
         _local_path, metadata = repos.get_single(query)
 
-        print(LOCAL_REPO.format_env_file(metadata))
+        print(LOCAL_REPO.format_env_file(metadata), end='')
 
 
 @cli.command()
