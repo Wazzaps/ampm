@@ -327,6 +327,9 @@ def upload(
         else:
             raise click.BadParameter(f'Unsupported file type: {local_path} ({local_path.stat().st_type})')
     else:
+        if compressed:
+            raise click.BadParameter('NOT IMPLEMENTED: Compressed artifacts with remote paths (add `--uncompressed`)')
+
         name = name or remote_path.strip('/').split('/')[-1]
         try:
             artifact_type = 'file'

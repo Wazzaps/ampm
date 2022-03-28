@@ -111,13 +111,19 @@ class LocalRepo(ArtifactRepo):
             if len(groups) > 1:
                 for group in groups.values():
                     if comparator.compare(compared_attr[2], group[0][1], first_group[0][1]) != 0:
+                        artifact_1 = first_group[0][0]
+                        artifact_2 = group[0][0]
                         raise AmbiguousComparisonError(
-                            f'Error: Returning multiple values of `{compared_attr[0]}` because the attribute(s) '
-                            f'{", ".join(f"`{a}`" for a in groupby_attrs)} are not unique.\n'
-                            f'- Artifact 1 = {first_group[0][0].combined_attrs}\n'
-                            f'- Artifact 2 = {group[0][0].combined_attrs}\n'
+                            f"Error: Couldn't decide which artifact to pick when comparing values of "
+                            f'`{compared_attr[0]}` because the value(s) of '
+                            f'{", ".join(f"`{a}`" for a in groupby_attrs)} are different between them.\n'
+                            f'ampm requires that you acknowledge these attributes are different to prevent mistakes.\n\n'
                             f'Try adding `{" ".join(f"-a {a}=@ignore" for a in groupby_attrs)}` '
-                            f'(or just `-a @any=@ignore`) to the query to ignore these attributes when grouping.'
+                            f'(or just `-a @any=@ignore`) to the query to ignore these attributes.\n\n'
+                            f'These are the problematic artifacts:\n'
+                            f'- Artifact 1 = {artifact_1.type}:{artifact_1.hash}\n    {artifact_1.combined_attrs}\n'
+                            f'- Artifact 2 = {artifact_2.type}:{artifact_2.hash}\n    {artifact_2.combined_attrs}\n\n'
+                            f"TL;DR: Read the message it's not that long"
                         )
 
             # Select the most relevant artifact in each group

@@ -519,6 +519,10 @@ class NfsRepo(ArtifactRepo):
             pass
 
     def hash_remote_file(self, remote_path: str, progress_bar=False) -> str:
+        assert remote_path.startswith(self.mount_path)
+        remote_path = remote_path[len(self.mount_path):].lstrip('/')
+        _validate_path(remote_path)
+
         with self._connected() as nfs:
             hasher = hashlib.sha256(b'')
             for chunk in nfs.read_stream(remote_path, progress_bar):
