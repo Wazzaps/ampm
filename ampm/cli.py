@@ -14,7 +14,7 @@ from typing import Tuple, Optional, Dict, Mapping
 from math import ceil
 from pathlib import Path
 from ampm.repo.base import ArtifactQuery, AmbiguousQueryError, RepoGroup, QueryNotFoundError, \
-    ArtifactMetadata, ArtifactRepo, REMOTE_REPO_URI, AmbiguousComparisonError
+    ArtifactMetadata, ArtifactRepo, REMOTE_REPO_URI, AmbiguousComparisonError, NiceTrySagi
 from ampm.repo.local import LOCAL_REPO
 from ampm import __version__
 from ampm.utils import _calc_dir_size, randbytes, hash_local_file
@@ -80,6 +80,9 @@ def handle_common_errors():
     except AmbiguousComparisonError as e:
         print(f'{" ".join(str(a) for a in e.args)}', file=sys.stderr)
         sys.exit(1)
+    except NiceTrySagi as e:
+        print(f'NiceTrySagi: {" ".join(str(a) for a in e.args)}', file=sys.stderr)
+        sys.exit(1)
 
 
 def _format_artifact_metadata(artifact_metadata: ArtifactMetadata) -> str:
@@ -110,6 +113,21 @@ def _format_artifact_metadata(artifact_metadata: ArtifactMetadata) -> str:
     return f'{colorama.Style.BRIGHT}{artifact_metadata.type}{colorama.Style.RESET_ALL}' \
            f'{colorama.Fore.LIGHTBLACK_EX}:{artifact_metadata.hash}{colorama.Fore.RESET}' \
            f'\n{combined_attrs}'
+
+
+def verify_type(artifact_type: str):
+    if ':' in artifact_type:
+        raise click.BadParameter(f'Artifact type cannot contain ":": {artifact_type}')
+    if '/.' in artifact_type:
+        raise click.BadParameter(f'Artifact type cannot contain "/.": {artifact_type}')
+    if artifact_type.startswith('.'):
+        raise click.BadParameter(f'Artifact type cannot start with ".": {artifact_type}')
+
+
+def verify_attributes(attrs: Dict[str, str]):
+    for attr in list(attrs.keys()) + list(attrs.values()):
+        if attr.startswith('@'):
+            raise click.BadParameter(f'Attribute cannot start with "@": {attr}')
 
 
 @cli.command()
@@ -233,6 +251,9 @@ def upload(
 
         If LOCAL_PATH is unspecified, assume already it's uploaded to value of `--remote-path`
     """
+
+    verify_type(type)
+    verify_attributes(attr)
 
     if local_path is None and remote_path is None:
         raise click.BadParameter('Must specify either LOCAL_PATH or --remote-path')

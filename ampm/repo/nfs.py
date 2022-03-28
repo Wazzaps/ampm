@@ -16,9 +16,14 @@ from pyNfsClient import (Portmap, Mount, NFSv3, MNT3_OK, NFS_PROGRAM,
                          NFS_V3, NFS3_OK, UNCHECKED, NFS3ERR_EXIST, UNSTABLE, NFS3ERR_NOTDIR, NFS3ERR_ISDIR, NFSSTAT3)
 
 from ampm.repo.base import ArtifactRepo, ArtifactMetadata, ArtifactQuery, QueryNotFoundError, ARTIFACT_TYPES, \
-    ArtifactCorruptedError
+    ArtifactCorruptedError, NiceTrySagi
 from ampm.repo.local import LOCAL_REPO
 from ampm.utils import _calc_dir_size
+
+
+def _validate_path(remote_path: str):
+    if remote_path.startswith('.') or '/.' in remote_path:
+        raise NiceTrySagi(f'Cannot access hidden directories: {remote_path}')
 
 
 class NfsConnection:
@@ -29,6 +34,7 @@ class NfsConnection:
     @staticmethod
     @contextlib.contextmanager
     def connect(host, remote_path) -> ContextManager["NfsConnection"]:
+        _validate_path(remote_path)
         auth = {
             "flavor": 1,
             "machine_name": "localhost",
@@ -127,6 +133,7 @@ class NfsConnection:
             raise IOError(f"NFS create failed: code={create_res['status']} ({NFSSTAT3[create_res['status']]})")
 
     def list_dir(self, remote_path: str):
+        _validate_path(remote_path)
         fh, _attrs = self._open(self._splitpath(remote_path))
         readdir_res = self.nfs3.readdir(fh)
         if readdir_res["status"] == NFS3_OK:
@@ -140,6 +147,7 @@ class NfsConnection:
             raise IOError(f"NFS readdir failed: code={readdir_res['status']} ({NFSSTAT3[readdir_res['status']]})")
 
     def walk_files(self, remote_path: str):
+        _validate_path(remote_path)
         fh, _attrs = self._open(self._splitpath(remote_path))
         readdir_res = self.nfs3.readdir(fh)
         if readdir_res["status"] == NFS3_OK:
@@ -154,6 +162,8 @@ class NfsConnection:
             raise IOError(f"NFS readdir failed: code={readdir_res['status']} ({NFSSTAT3[readdir_res['status']]})")
 
     def rename(self, old_path: str, new_path: str):
+        _validate_path(old_path)
+        _validate_path(new_path)
         old_path_parts = self._splitpath(old_path)
         new_path_parts = self._splitpath(new_path)
         old_fh, _attrs = self._open(old_path_parts[:-1])
@@ -163,6 +173,7 @@ class NfsConnection:
         return rename_res["status"] == NFS3_OK
 
     def symlink(self, dest_path: str, link_path: str):
+        _validate_path(link_path)
         link_path = self._splitpath(link_path)
         fh, _attrs = self._open(link_path[:-1])
         symlink_res = self.nfs3.symlink(fh, link_path[-1], dest_path)
@@ -170,6 +181,7 @@ class NfsConnection:
             raise IOError(f"NFS symlink failed: code={symlink_res['status']} ({NFSSTAT3[symlink_res['status']]})")
 
     def readlink(self, remote_path: str) -> bytes:
+        _validate_path(remote_path)
         link_path = self._splitpath(remote_path)
         fh, _attrs = self._open(link_path)
         readlink_res = self.nfs3.readlink(fh)
@@ -179,6 +191,7 @@ class NfsConnection:
         return readlink_res["resok"]["data"]
 
     def read_stream(self, remote_path: str, chunk_size: int = 1024 * 50, progress_bar=False):
+        _validate_path(remote_path)
         remote_path = self._splitpath(remote_path)
         fh, attrs = self._open(remote_path)
         if attrs["type"] != 1:
@@ -212,6 +225,7 @@ class NfsConnection:
             bar.close()
 
     def read(self, remote_path: str, chunk_size: int = 1024 * 50, progress_bar=False):
+        _validate_path(remote_path)
         return b''.join(list(self.read_stream(remote_path, chunk_size, progress_bar)))
 
     def download(
@@ -221,6 +235,7 @@ class NfsConnection:
             chunk_size: int = 1024 * 50,
             progress_bar=False
     ) -> Optional[str]:
+        _validate_path(remote_path)
         got_one_file = False
         hasher = hashlib.sha256(b'')
 
@@ -240,6 +255,7 @@ class NfsConnection:
             return hasher.hexdigest()
 
     def write_stream(self, contents_gen: Iterable[bytes], remote_path: str, contents_len: int, progress_bar=False):
+        _validate_path(remote_path)
         remote_path = self._splitpath(remote_path)
         fh = self._create_with_dirs(remote_path)
 
@@ -269,6 +285,7 @@ class NfsConnection:
             bar.close()
 
     def write(self, contents: bytes, remote_path: str, chunk_size: int = 1024 * 50, progress_bar=False):
+        _validate_path(remote_path)
         def chunked():
             for i in range(0, len(contents), chunk_size):
                 yield contents[i:i + chunk_size]
@@ -276,6 +293,7 @@ class NfsConnection:
         self.write_stream(chunked(), remote_path, len(contents), progress_bar)
 
     def _upload_dir(self, local_path: Path, remote_path: str, progress_bar: Optional[tqdm.tqdm] = None):
+        _validate_path(remote_path)
         for entry in os.listdir(local_path):
             entry = Path(local_path / entry)
             if not entry.is_symlink() and entry.is_dir():
@@ -296,6 +314,7 @@ class NfsConnection:
             allow_dir=False,
             progress_bar=False
     ):
+        _validate_path(remote_path)
         if local_path.is_symlink():
             self.symlink(str(local_path.readlink()), remote_path)
 
