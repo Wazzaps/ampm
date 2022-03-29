@@ -104,10 +104,12 @@ class NfsConnection:
             # print(mkdir_res)
             if mkdir_res["status"] == NFS3_OK:
                 dir_fh = mkdir_res["resok"]["obj"]["handle"]["data"]
-            elif mkdir_res["status"] == NFS3ERR_EXIST:
-                # Make sure it's a directory
-                if mkdir_res["resfail"]["after"]["attributes"]["type"] != 2:
-                    raise IOError("Tried to create directory but file exists with same name")
+            else:
+                # Maybe it already exists?
+                if mkdir_res["status"] == NFS3ERR_EXIST:
+                    # Make sure it's a directory
+                    if mkdir_res["resfail"]["after"]["attributes"]["type"] != 2:
+                        raise IOError("Tried to create directory but file exists with same name")
 
                 lookup_res = self.nfs3.lookup(dir_fh, path_part)
                 # print('--- lookup_res ---')
@@ -115,9 +117,7 @@ class NfsConnection:
                 if lookup_res["status"] == NFS3_OK:
                     dir_fh = lookup_res["resok"]["object"]["data"]
                 else:
-                    raise IOError(f"NFS lookup failed: code={lookup_res['status']} ({NFSSTAT3[lookup_res['status']]})")
-            else:
-                raise IOError(f"NFS mkdir failed: code={mkdir_res['status']} ({NFSSTAT3[mkdir_res['status']]})")
+                    raise IOError(f"NFS mkdir.lookup failed: code={lookup_res['status']} ({NFSSTAT3[lookup_res['status']]})")
 
         return dir_fh
 
@@ -244,11 +244,21 @@ class NfsConnection:
                 hasher = None  # Only hash one file
             local_file_path = local_path / remote_file_path[len(remote_path):].strip('/')
             local_file_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(local_file_path, 'wb') as f:
-                for chunk in self.read_stream(remote_file_path, chunk_size, progress_bar):
-                    f.write(chunk)
-                    if hasher:
-                        hasher.update(chunk)
+
+            try:
+                local_file_path.symlink_to(self.readlink(remote_file_path).decode())
+                hasher = None  # Don't hash symlinks
+            except IOError:
+                # Not a symlink, read as file
+
+                def opener(path, flags):
+                    return os.open(path, flags, 0o755)
+
+                with open(local_file_path, 'wb', opener=opener) as f:
+                    for chunk in self.read_stream(remote_file_path, chunk_size, progress_bar):
+                        f.write(chunk)
+                        if hasher:
+                            hasher.update(chunk)
             got_one_file = True
 
         if hasher:
