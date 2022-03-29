@@ -1,6 +1,7 @@
 import json
 import gzip
 import re
+import tarfile
 import time
 import pytest
 import ampm.cli
@@ -12,7 +13,7 @@ from click.testing import CliRunner
 @pytest.fixture()
 def upload(nfs_repo_uri):
     def _upload(
-            local_path: str,
+            local_path: Optional[str],
             artifact_type: str,
             compressed: bool,
             attributes=None,
@@ -22,7 +23,9 @@ def upload(nfs_repo_uri):
             attributes = {}
         runner = CliRunner(mix_stderr=False, env={'AMPM_SERVER': nfs_repo_uri})
 
-        args = ['upload', local_path, '--type', artifact_type, '--compressed' if compressed else '--uncompressed']
+        args = ['upload', '--type', artifact_type, '--compressed' if compressed else '--uncompressed']
+        if local_path:
+            args += [local_path]
         if remote_path:
             args += ['--remote-path', remote_path]
         for k, v in attributes.items():
@@ -170,6 +173,90 @@ def test_upload_dir_location(nfs_repo_path, nfs_mount_path, clean_repos, upload,
 
 
 @pytest.mark.parametrize('is_compressed', ['compressed', 'uncompressed'])
+def test_upload_external_single_file(nfs_repo_path, nfs_mount_path: Path, clean_repos, upload, is_compressed):
+    _ = clean_repos
+    remote_path = nfs_mount_path / 'custom_dir' / ('foobar.txt' + ('.gz' if is_compressed == 'compressed' else ''))
+
+    data = b'hello\n'
+    if is_compressed == 'compressed':
+        file_contents = gzip.compress(data)
+    else:
+        file_contents = data
+
+    remote_path.parent.mkdir(parents=True, exist_ok=True)
+    remote_path.write_bytes(file_contents)
+
+    artifact_hash = upload(
+        local_path=None,
+        artifact_type='foo',
+        remote_path=str(remote_path),
+        compressed=is_compressed == 'compressed'
+    )
+    assert (nfs_repo_path / 'metadata' / 'foo' / f'{artifact_hash}.toml').is_file(), "Metadata file wasn't created"
+    assert remote_path.read_bytes() == file_contents, "Data file was modified/deleted!!!"
+
+
+def test_upload_external_dir_ok(nfs_repo_path, nfs_mount_path: Path, clean_repos, upload):
+    _ = clean_repos
+    remote_path = nfs_mount_path / 'custom_dir' / 'foo_dir'
+
+    data = b'hello\n'
+    remote_path.mkdir(parents=True, exist_ok=True)
+    (remote_path / 'a.txt').write_bytes(data)
+
+    artifact_hash = upload(
+        local_path=None,
+        artifact_type='foo',
+        remote_path=str(remote_path),
+        compressed=False
+    )
+    assert (nfs_repo_path / 'metadata' / 'foo' / f'{artifact_hash}.toml').is_file(), "Metadata file wasn't created"
+    assert remote_path.is_dir(), "Data dir was modified/deleted!!!"
+
+
+def test_upload_external_dir_err(nfs_repo_path, nfs_mount_path: Path, clean_repos, upload):
+    _ = clean_repos
+    remote_path = nfs_mount_path / 'custom_dir' / 'foo_dir'
+
+    data = b'hello\n'
+    remote_path.mkdir(parents=True, exist_ok=True)
+    (remote_path / 'a.txt').write_bytes(data)
+
+    with pytest.raises(AssertionError):
+        _artifact_hash = upload(
+            local_path=None,
+            artifact_type='foo',
+            remote_path=str(remote_path),
+            compressed=True
+        )
+    assert not (nfs_repo_path / 'metadata' / 'foo').is_dir(), "Metadata file was created"
+
+
+def test_upload_external_archive(nfs_repo_path, nfs_mount_path: Path, clean_repos, upload):
+    _ = clean_repos
+    tmp_remote_path = nfs_mount_path / 'custom_dir' / 'a.txt'
+    remote_path = nfs_mount_path / 'custom_dir' / 'foo_dir.tar.gz'
+
+    data = b'hello\n'
+    tmp_remote_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_remote_path.write_bytes(data)
+
+    with tarfile.open(str(remote_path), 'w:gz') as tar:
+        tar.add(str(tmp_remote_path), arcname='a.txt')
+
+    file_contents = remote_path.read_bytes()
+
+    artifact_hash = upload(
+        local_path=None,
+        artifact_type='foo',
+        remote_path=str(remote_path),
+        compressed=True
+    )
+    assert (nfs_repo_path / 'metadata' / 'foo' / f'{artifact_hash}.toml').is_file(), "Metadata file wasn't created"
+    assert remote_path.read_bytes() == file_contents, "Data archive was modified/deleted!!!"
+
+
+@pytest.mark.parametrize('is_compressed', ['compressed', 'uncompressed'])
 def test_download_single_file(clean_repos, upload, download, is_compressed):
     _ = clean_repos
     artifact_hash = upload(
@@ -206,6 +293,70 @@ def test_download_dir(clean_repos, upload, download, is_compressed):
     assert (artifact_path / 'hello.txt').is_file(), "File inside wasn't created"
     assert (artifact_path / 'nested' / 'boo.txt').is_file(), "File nested inside wasn't created"
     assert (artifact_path / 'nested' / 'boo.txt').read_bytes() == b"boo\n", "File nested has wrong contents"
+
+
+@pytest.mark.parametrize('is_compressed', ['compressed', 'uncompressed'])
+def test_download_external_single_file(nfs_mount_path: Path, clean_repos, upload, download, is_compressed):
+    _ = clean_repos
+    remote_path = nfs_mount_path / 'custom_dir' / ('foobar.txt' + ('.gz' if is_compressed == 'compressed' else ''))
+
+    data = b'hello\n'
+    if is_compressed == 'compressed':
+        file_contents = gzip.compress(data)
+    else:
+        file_contents = data
+
+    remote_path.parent.mkdir(parents=True, exist_ok=True)
+    remote_path.write_bytes(file_contents)
+
+    artifact_hash = upload(
+        local_path=None,
+        artifact_type='foo',
+        remote_path=str(remote_path),
+        compressed=is_compressed == 'compressed'
+    )
+    artifact_path = download(f'foo:{artifact_hash}', {})
+    assert artifact_path.read_bytes() == data, "Downloaded file has wrong contents"
+
+
+def test_download_external_dir_ok(nfs_mount_path: Path, clean_repos, upload, download):
+    _ = clean_repos
+    remote_path = nfs_mount_path / 'custom_dir' / 'foo_dir'
+
+    file_contents = b'hello\n'
+    remote_path.mkdir(parents=True, exist_ok=True)
+    (remote_path / 'a.txt').write_bytes(file_contents)
+
+    artifact_hash = upload(
+        local_path=None,
+        artifact_type='foo',
+        remote_path=str(remote_path),
+        compressed=False
+    )
+    artifact_path = download(f'foo:{artifact_hash}', {})
+    assert (artifact_path / 'a.txt').read_bytes() == file_contents, "Downloaded file has wrong contents"
+
+
+def test_download_external_archive(nfs_mount_path: Path, clean_repos, upload, download):
+    _ = clean_repos
+    tmp_remote_path = nfs_mount_path / 'custom_dir' / 'a.txt'
+    remote_path = nfs_mount_path / 'custom_dir' / 'foo_dir.tar.gz'
+
+    data = b'hello\n'
+    tmp_remote_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_remote_path.write_bytes(data)
+
+    with tarfile.open(str(remote_path), 'w:gz') as tar:
+        tar.add(str(tmp_remote_path), arcname='a.txt')
+
+    artifact_hash = upload(
+        local_path=None,
+        artifact_type='foo',
+        remote_path=str(remote_path),
+        compressed=True
+    )
+    artifact_path = download(f'foo:{artifact_hash}', {})
+    assert (artifact_path / 'a.txt').read_bytes() == data, "Downloaded file has wrong contents"
 
 
 @pytest.mark.parametrize('filter_type', ['num', 'date', 'semver'])

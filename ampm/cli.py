@@ -328,13 +328,23 @@ def upload(
             raise click.BadParameter(f'Unsupported file type: {local_path} ({local_path.stat().st_type})')
     else:
         if compressed:
-            raise click.BadParameter('NOT IMPLEMENTED: Compressed artifacts with remote paths (add `--uncompressed`)')
-
-        name = name or remote_path.strip('/').split('/')[-1]
-        try:
+            if remote_path.endswith('.tar.gz'):
+                artifact_type = 'tar.gz'
+                name = name or remote_path.strip('/').split('/')[-1][:-len('.tar.gz')]
+            elif remote_path.endswith('.gz'):
+                artifact_type = 'gz'
+                name = name or remote_path.strip('/').split('/')[-1][:-len('.gz')]
+            else:
+                raise click.BadParameter(f'Remote artifact is not compressed using a known compression method '
+                                         f'(.tar.gz or .gz): {remote_path}\n'
+                                         f'Try adding `--uncompressed` to create an uncompressed artifact.')
+        else:
             artifact_type = 'file'
+            name = name or remote_path.strip('/').split('/')[-1]
+
+        try:
             artifact_hash = remote_repo.hash_remote_file(remote_path, progress_bar=True)
-        except IsADirectoryError:
+        except OSError:
             artifact_type = 'dir'
             artifact_hash = None
 
