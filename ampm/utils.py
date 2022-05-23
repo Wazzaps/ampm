@@ -14,7 +14,10 @@ def _calc_dir_size(path: Path) -> int:
     for dirpath, _dirnames, filenames in os.walk(path):
         for f in filenames:
             fp = os.path.join(dirpath, f)
-            total_size += os.path.getsize(fp)
+            try:
+                total_size += os.path.getsize(fp)
+            except FileNotFoundError:
+                pass
     return total_size
 
 

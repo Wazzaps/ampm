@@ -480,7 +480,7 @@ class NfsRepo(ArtifactRepo):
             elif metadata.path_type == 'tar.gz':
                 tmp_local_path.mkdir(parents=True)
                 decompressor = subprocess.Popen(
-                    ['tar', 'xz'],
+                    ['tar', '--delay-directory-restore', '-xz'],
                     stdin=subprocess.PIPE,
                     stdout=subprocess.PIPE,
                     cwd=str(tmp_local_path),
