@@ -9,8 +9,9 @@ from ampm.utils import randbytes
 
 def test_operations(clean_repos, nfs_repo: NfsRepo, nfs_mount_path: Path):
     _ = clean_repos
+    nfs = NfsConnection(nfs_repo.host, nfs_repo.mount_path)
 
-    with NfsConnection.connect(nfs_repo.host, nfs_repo.mount_path) as nfs:
+    with nfs.connected():
         ident = f'ampm_tests_{randbytes(8).hex()}'
         local_path = Path(f'/tmp/{ident}')
         remote_path = Path(f'nfs_tests')
@@ -58,8 +59,9 @@ def test_operations(clean_repos, nfs_repo: NfsRepo, nfs_mount_path: Path):
 
 def test_path_traversal(clean_repos, nfs_repo: NfsRepo, nfs_mount_path: Path):
     _ = clean_repos
+    nfs = NfsConnection(nfs_repo.host, nfs_repo.mount_path)
 
-    with NfsConnection.connect(nfs_repo.host, nfs_repo.mount_path) as nfs:
+    with nfs.connected():
         local_path = Path('/non_existent_path')
         remote_path = Path(f'nfs_tests')
 
