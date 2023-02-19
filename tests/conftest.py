@@ -8,6 +8,8 @@ from ampm.repo.local import LOCAL_REPO
 from ampm.repo.nfs import NfsRepo
 from ampm.utils import randbytes
 
+BIG_FILE_SIZE_MIB = 100
+
 
 @pytest.fixture()
 def nfs_repo_path(nfs_repo) -> Path:
@@ -33,6 +35,28 @@ def local_repo_path() -> Path:
 def clean_repos(local_repo_path, nfs_repo_path):
     shutil.rmtree(local_repo_path / 'metadata', ignore_errors=True)
     shutil.rmtree(local_repo_path / 'artifacts', ignore_errors=True)
+
+
+@pytest.fixture(scope='session')
+def big_file(tmp_path_factory: "TempPathFactory"):
+    tmp_path: Path = tmp_path_factory.mktemp('big_file_')
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    tmpfile_path = tmp_path / 'tmpfile'
+    if tmpfile_path.exists():
+        if tmpfile_path.stat().st_size == BIG_FILE_SIZE_MIB * 1024 * 1024:
+            # Already exists, reuse it
+            yield tmpfile_path
+            return
+        else:
+            # Wrong size, recreate
+            tmpfile_path.unlink()
+
+    with Path('/dev/urandom').open('rb') as rng:
+        with tmpfile_path.open('wb') as fd:
+            for _ in range(BIG_FILE_SIZE_MIB):
+                fd.write(rng.read(1024*1024))  # 1 MiB per chunk
+
+    yield tmpfile_path
 
 
 @pytest.fixture(scope='session')

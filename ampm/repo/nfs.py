@@ -20,22 +20,44 @@ from ampm.repo.base import ArtifactRepo, ArtifactMetadata, ArtifactQuery, QueryN
 from ampm.repo.local import LOCAL_REPO
 from ampm.utils import _calc_dir_size
 
+DEFAULT_CHUNK_SIZE = 1024 * 256
+NFS_OP_TIMEOUT_SEC = 16
+
 
 def _validate_path(remote_path: str):
     if remote_path.startswith('.') or '/.' in remote_path:
         raise NiceTrySagi(f'Cannot access hidden directories: {remote_path}')
 
 
-class NfsConnection:
-    def __init__(self, nfs3: NFSv3, root_fh: bytes):
-        self.nfs3 = nfs3
-        self.root_fh = root_fh
+def _retry_reconnect_and_reduce_chunk_size(fn):
+    def inner(self, *args, chunk_size, **kwargs):
+        chunk_size = min(self.chunk_size_limit, chunk_size)
+        is_first = True
+        while self.chunk_size_limit > 1024 or is_first:
+            try:
+                return fn(self, *args, chunk_size=chunk_size, **kwargs)
+            except Exception as e:
+                if chunk_size <= 1024:
+                    raise
+                self.chunk_size_limit = chunk_size = int(ceil(chunk_size / 2 / 1024) * 1024)
+                is_first = False
+                print(f'WARN: Lowering chunk size to {chunk_size} due to IO related error: {e}', file=sys.stderr)
+                self._reconnect()
 
-    @staticmethod
-    @contextlib.contextmanager
-    def connect(host, remote_path) -> ContextManager["NfsConnection"]:
-        _validate_path(remote_path)
-        auth = {
+    return inner
+
+
+class NfsConnection:
+    def __init__(self, host: str, remote_path: str):
+        self.host = host
+        self.remote_path = remote_path
+        self.mount: Mount = None
+        self.portmap: Portmap = None
+        self.nfs3: NFSv3 = None
+        self.root_fh: bytes = None
+        self.chunk_size_limit = 1024 * 1024 * 1024  # 1 GiB
+
+        self.auth = {
             "flavor": 1,
             "machine_name": "localhost",
             "uid": 0,
@@ -43,35 +65,66 @@ class NfsConnection:
             "aux_gid": list(),
         }
 
+    def _reconnect(self):
+        if self.nfs3:
+            self._disconnect()
+        self._connect()
+
+    def _connect(self):
+        _validate_path(self.remote_path)
+
         # portmap initialization
-        portmap = Portmap(host, timeout=3600)
-        portmap.connect()
+        self.portmap = Portmap(self.host, timeout=3600)
+        self.portmap.connect()
 
         # mount initialization
-        mnt_port = portmap.getport(Mount.program, Mount.program_version)
-        mount = Mount(host=host, port=mnt_port, timeout=3600, auth=auth)
-        mount.connect()
+        mnt_port = self.portmap.getport(Mount.program, Mount.program_version)
+        self.mount = Mount(host=self.host, port=mnt_port, timeout=3600, auth=self.auth)
+        self.mount.connect()
 
         # do mount
-        mnt_res = mount.mnt(remote_path, auth)
+        mnt_res = self.mount.mnt(self.remote_path, self.auth)
         if mnt_res["status"] == MNT3_OK:
-            root_fh = mnt_res["mountinfo"]["fhandle"]
-            nfs3 = None
+            self.nfs3 = None
             try:
-                nfs_port = portmap.getport(NFS_PROGRAM, NFS_V3)
-                nfs3 = NFSv3(host, nfs_port, 3600, auth)
-                nfs3.connect()
-                yield NfsConnection(nfs3, root_fh)
-            finally:
-                if nfs3:
-                    nfs3.disconnect()
-                mount.umnt(auth)
-                mount.disconnect()
-                portmap.disconnect()
+                nfs_port = self.portmap.getport(NFS_PROGRAM, NFS_V3)
+                self.nfs3 = NFSv3(self.host, nfs_port, NFS_OP_TIMEOUT_SEC, self.auth)
+                self.nfs3.connect()
+                self.root_fh = mnt_res["mountinfo"]["fhandle"]
+            except Exception:
+                if self.nfs3:
+                    self.nfs3.disconnect()
+                    self.nfs3 = None
+                self.mount.umnt(self.auth)
+                self.mount.disconnect()
+                self.mount = None
+                self.portmap.disconnect()
+                self.portmap = None
+                raise
         else:
-            mount.disconnect()
-            portmap.disconnect()
+            self.mount.disconnect()
+            self.mount = None
+            self.portmap.disconnect()
+            self.portmap = None
             raise ConnectionError(f"NFS mount failed: code={mnt_res['status']} ({NFSSTAT3[mnt_res['status']]})")
+
+    def _disconnect(self):
+        if self.nfs3:
+            self.nfs3.disconnect()
+            self.nfs3 = None
+        if self.mount:
+            self.mount.umnt(self.auth)
+            self.mount.disconnect()
+            self.mount = None
+        if self.portmap:
+            self.portmap.disconnect()
+            self.portmap = None
+
+    @contextlib.contextmanager
+    def connected(self) -> ContextManager["NfsConnection"]:
+        if not self.nfs3:
+            self._connect()
+        yield self
 
     @staticmethod
     def _splitpath(remote_path: str) -> List[str]:
@@ -190,7 +243,38 @@ class NfsConnection:
             raise IOError(f"NFS readlink failed: code={readlink_res['status']} ({NFSSTAT3[readlink_res['status']]})")
         return readlink_res["resok"]["data"]
 
-    def read_stream(self, remote_path: str, chunk_size: int = 1024 * 50, progress_bar=False):
+    @_retry_reconnect_and_reduce_chunk_size
+    def _read(self, fh, offset, chunk_size):
+        read_res = self.nfs3.read(fh, offset, chunk_size)
+        if read_res["status"] == NFS3_OK:
+            data = read_res["resok"]["data"]
+            if len(data) == 0:
+                raise IOError("NFS read returned 0 bytes")
+            return data
+        elif read_res["status"] == NFS3ERR_ISDIR:
+            raise IsADirectoryError()
+        else:
+            raise IOError(f"NFS read failed: code={read_res['status']} ({NFSSTAT3[read_res['status']]})")
+
+    @_retry_reconnect_and_reduce_chunk_size
+    def _write(self, fh, offset, content, chunk_size):
+        write_res = self.nfs3.write(
+            fh,
+            offset=offset,
+            count=min(len(content), chunk_size),
+            content=content[:chunk_size],
+            stable_how=UNSTABLE,
+        )
+        # print('--- write_res ---')
+        # print(write_res)
+        if write_res["status"] == NFS3_OK:
+            if write_res["resok"]["count"] == 0:
+                raise IOError("NFS write returned 0 bytes")
+            return write_res["resok"]["count"]
+        else:
+            raise IOError(f"NFS write failed: code={write_res['status']} ({NFSSTAT3[write_res['status']]})")
+
+    def read_stream(self, remote_path: str, chunk_size: int = DEFAULT_CHUNK_SIZE, progress_bar=False):
         _validate_path(remote_path)
         remote_path = self._splitpath(remote_path)
         fh, attrs = self._open(remote_path)
@@ -204,27 +288,19 @@ class NfsConnection:
             bar = tqdm.tqdm(total=ceil(attrs["size"] / 1024), desc=f"Reading {remote_path[-1]}", unit='KiB')
 
         while left > 0:
-            read_res = self.nfs3.read(fh, offset, chunk_size)
-            if read_res["status"] == NFS3_OK:
-                data = read_res["resok"]["data"]
-                if len(data) == 0:
-                    raise IOError("NFS read returned 0 bytes")
-                offset += len(data)
-                left -= len(data)
-                if bar:
-                    bar.update(len(data) // 1024)
-                yield data
-            elif read_res["status"] == NFS3ERR_ISDIR:
-                raise IsADirectoryError()
-            else:
-                raise IOError(f"NFS read failed: code={read_res['status']} ({NFSSTAT3[read_res['status']]})")
+            data = self._read(fh, offset, chunk_size=chunk_size)
+            offset += len(data)
+            left -= len(data)
+            if bar:
+                bar.update(len(data) // 1024)
+            yield data
 
         if bar:
             bar.reset()
             bar.update(bar.total)
             bar.close()
 
-    def read(self, remote_path: str, chunk_size: int = 1024 * 50, progress_bar=False):
+    def read(self, remote_path: str, chunk_size: int = DEFAULT_CHUNK_SIZE, progress_bar=False):
         _validate_path(remote_path)
         return b''.join(list(self.read_stream(remote_path, chunk_size, progress_bar)))
 
@@ -232,7 +308,7 @@ class NfsConnection:
             self,
             local_path: Path,
             remote_path: str,
-            chunk_size: int = 1024 * 50,
+            chunk_size: int = DEFAULT_CHUNK_SIZE,
             progress_bar=False
     ) -> Optional[str]:
         _validate_path(remote_path)
@@ -275,15 +351,10 @@ class NfsConnection:
             bar = tqdm.tqdm(total=ceil(contents_len / 1024), desc=f"Writing {remote_path[-1]}", unit='KiB')
 
         for chunk in contents_gen:
-            write_res = self.nfs3.write(fh, offset=offset, count=len(chunk), content=chunk, stable_how=UNSTABLE)
-            # print('--- write_res ---')
-            # print(write_res)
-            if write_res["status"] == NFS3_OK:
-                assert write_res["resok"]["count"] == len(chunk)
-            else:
-                raise IOError(f"NFS write failed: code={write_res['status']} ({NFSSTAT3[write_res['status']]})")
-
-            offset += len(chunk)
+            while chunk:
+                wrote = self._write(fh, offset, content=chunk, chunk_size=DEFAULT_CHUNK_SIZE)
+                chunk = chunk[wrote:]
+                offset += wrote
             if bar:
                 bar.update(len(chunk) // 1024)
 
@@ -294,8 +365,9 @@ class NfsConnection:
             bar.update(bar.total)
             bar.close()
 
-    def write(self, contents: bytes, remote_path: str, chunk_size: int = 1024 * 50, progress_bar=False):
+    def write(self, contents: bytes, remote_path: str, chunk_size: int = DEFAULT_CHUNK_SIZE, progress_bar=False):
         _validate_path(remote_path)
+
         def chunked():
             for i in range(0, len(contents), chunk_size):
                 yield contents[i:i + chunk_size]
@@ -320,7 +392,7 @@ class NfsConnection:
             self,
             local_path: Path,
             remote_path: str,
-            chunk_size: int = 1024 * 50,
+            chunk_size: int = DEFAULT_CHUNK_SIZE,
             allow_dir=False,
             progress_bar=False
     ):
@@ -365,19 +437,7 @@ class NfsRepo(ArtifactRepo):
         self.host = host
         self.mount_path = mount_path
         self.repo_path = repo_path
-        self.connection: Optional[NfsConnection] = None
-
-    @contextlib.contextmanager
-    def _connected(self) -> ContextManager["NfsConnection"]:
-        if self.connection is None:
-            with NfsConnection.connect(self.host, self.mount_path) as nfs:
-                self.connection = nfs
-                try:
-                    yield nfs
-                finally:
-                    self.connection = None
-        else:
-            yield self.connection
+        self.nfs = NfsConnection(host, mount_path)
 
     @staticmethod
     def from_uri_part(uri_part: str) -> "NfsRepo":
@@ -391,7 +451,7 @@ class NfsRepo(ArtifactRepo):
     def upload(self, metadata: ArtifactMetadata, local_path: Optional[Path]):
         assert metadata.path_type in ARTIFACT_TYPES, f'Invalid artifact path type: {metadata.path_type}'
 
-        with self._connected() as nfs:
+        with self.nfs.connected():
             if local_path is not None:
                 print('Uploading artifact...', file=sys.stderr)
 
@@ -399,19 +459,19 @@ class NfsRepo(ArtifactRepo):
                 remote_base_path = self.artifact_base_path_of(metadata)
                 tmp_remote_path = self.artifact_path_of(metadata, '.tmp')
 
-                nfs.upload(local_path, tmp_remote_path, allow_dir=True, progress_bar=True)
-                nfs.rename(tmp_remote_base_path, remote_base_path)
+                self.nfs.upload(local_path, tmp_remote_path, allow_dir=True, progress_bar=True)
+                self.nfs.rename(tmp_remote_base_path, remote_base_path)
 
             print('Uploading metadata...', file=sys.stderr)
             tmp_remote_metadata_path = self.metadata_path_of(metadata.type, metadata.hash, '.toml.tmp')
             remote_metadata_path = self.metadata_path_of(metadata.type, metadata.hash)
-            nfs.write(toml.dumps(metadata.to_dict()).encode('utf-8'), tmp_remote_metadata_path)
-            nfs.rename(tmp_remote_metadata_path, remote_metadata_path)
+            self.nfs.write(toml.dumps(metadata.to_dict()).encode('utf-8'), tmp_remote_metadata_path)
+            self.nfs.rename(tmp_remote_metadata_path, remote_metadata_path)
 
             print('Done!', file=sys.stderr)
 
     def lookup(self, query: ArtifactQuery) -> Iterable[ArtifactMetadata]:
-        with self._connected() as nfs:
+        with self.nfs.connected():
             if query.is_exact:
                 # print('Downloading metadata')
                 metadata_path = LOCAL_REPO.metadata_path_of(query.type, query.hash, '.toml')
@@ -420,7 +480,7 @@ class NfsRepo(ArtifactRepo):
                 tmp_metadata_path.unlink(missing_ok=True)
 
                 try:
-                    nfs.download(tmp_metadata_path, self.metadata_path_of(query.type, query.hash))
+                    self.nfs.download(tmp_metadata_path, self.metadata_path_of(query.type, query.hash))
                 except ConnectionError:
                     raise
                 except IOError:
@@ -442,13 +502,13 @@ class NfsRepo(ArtifactRepo):
 
         actual_hash = None
 
-        with self._connected() as nfs:
+        with self.nfs.connected():
             tmp_local_base_path.mkdir(parents=True, exist_ok=True)
             if metadata.path_type == 'file' or metadata.path_type == 'dir':
                 if metadata.path_location:
-                    actual_hash = nfs.download(tmp_local_base_path / metadata.name, remote_base_path, progress_bar=True)
+                    actual_hash = self.nfs.download(tmp_local_base_path / metadata.name, remote_base_path, progress_bar=True)
                 else:
-                    actual_hash = nfs.download(tmp_local_base_path, remote_base_path, progress_bar=True)
+                    actual_hash = self.nfs.download(tmp_local_base_path, remote_base_path, progress_bar=True)
             elif metadata.path_type == 'gz':
                 decompressor = subprocess.Popen(['gzip', '-d'], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
                 hasher = hashlib.sha256(b'')
@@ -463,7 +523,7 @@ class NfsRepo(ArtifactRepo):
                                 break
 
                 def in_writer():
-                    for chunk in nfs.read_stream(remote_path, progress_bar=True):
+                    for chunk in self.nfs.read_stream(remote_path, progress_bar=True):
                         decompressor.stdin.write(chunk)
                         hasher.update(chunk)
                     decompressor.stdin.close()
@@ -487,7 +547,7 @@ class NfsRepo(ArtifactRepo):
                 )
                 hasher = hashlib.sha256(b'')
 
-                for chunk in nfs.read_stream(remote_path, progress_bar=True):
+                for chunk in self.nfs.read_stream(remote_path, progress_bar=True):
                     decompressor.stdin.write(chunk)
                     hasher.update(chunk)
                 decompressor.stdin.close()
@@ -508,8 +568,8 @@ class NfsRepo(ArtifactRepo):
     def download_metadata_for_type(self, artifact_type: str):
         base_path = self.metadata_path_of(artifact_type, '', '')
         try:
-            with self._connected() as nfs:
-                for metadata_path in nfs.walk_files(base_path):
+            with self.nfs.connected():
+                for metadata_path in self.nfs.walk_files(base_path):
                     matches = re.match(r'(.*)/([a-z0-9]{32})\.toml$', metadata_path[len(base_path):])
                     if matches:
                         type_extra = matches.group(1)
@@ -521,11 +581,11 @@ class NfsRepo(ArtifactRepo):
                             '.toml.tmp',
                         )
                         tmp_local_path.parent.mkdir(parents=True, exist_ok=True)
-                        nfs.download(tmp_local_path, self.metadata_path_of(artifact_type + type_extra, artifact_hash))
+                        self.nfs.download(tmp_local_path, self.metadata_path_of(artifact_type + type_extra, artifact_hash))
                         tmp_local_path.rename(local_path)
         except (ConnectionError, PermissionError):
             raise
-        except IOError as e:
+        except IOError:
             pass
 
     def hash_remote_file(self, remote_path: str, progress_bar=False) -> str:
@@ -533,9 +593,9 @@ class NfsRepo(ArtifactRepo):
         remote_path = remote_path[len(self.mount_path):].lstrip('/')
         _validate_path(remote_path)
 
-        with self._connected() as nfs:
+        with self.nfs.connected():
             hasher = hashlib.sha256(b'')
-            for chunk in nfs.read_stream(remote_path, progress_bar):
+            for chunk in self.nfs.read_stream(remote_path, progress_bar):
                 hasher.update(chunk)
             return hasher.hexdigest()
 
@@ -556,4 +616,3 @@ class NfsRepo(ArtifactRepo):
         else:
             return f'{self.repo_path}/artifacts/{metadata.type.lower()}/{metadata.hash.lower()}{suffix}/' \
                    f'{metadata.name}{metadata.path_suffix}'
-

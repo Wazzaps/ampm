@@ -1,6 +1,7 @@
 import json
 import gzip
 import re
+import subprocess
 import tarfile
 import time
 import pytest
@@ -8,6 +9,12 @@ import ampm.cli
 from pathlib import Path
 from typing import Dict, Optional
 from click.testing import CliRunner
+
+
+def assert_files_identical(path_a: Path, path_b: Path):
+    sum_a = subprocess.check_output(['sha256sum', str(path_a)]).partition(b' ')[0]
+    sum_b = subprocess.check_output(['sha256sum', str(path_b)]).partition(b' ')[0]
+    assert sum_a == sum_b, f'Files were not identical:\n    {sum_a.decode()}  {str(path_a)}\n != {sum_b.decode()}  {str(path_b)}\n'
 
 
 @pytest.fixture()
@@ -485,3 +492,14 @@ def test_stress(clean_repos, upload, list_, download):
     list_duration = time.time() - t
     print(f'Listed {COUNT} artifacts in {list_duration} seconds')
     assert list_duration < 5, f"Listing {COUNT} artifacts took too long"
+
+@pytest.mark.parametrize('is_compressed', ['compressed', 'uncompressed'])
+def test_download_big_file(clean_repos, upload, download, big_file, is_compressed):
+    _ = clean_repos
+    artifact_hash = upload(
+        str(big_file),
+        artifact_type='foo',
+        compressed=is_compressed == 'compressed'
+    )
+    artifact_path = download(f'foo:{artifact_hash}', {})
+    assert_files_identical(artifact_path, big_file)
