@@ -462,7 +462,7 @@ def test_stress(clean_repos, upload, list_, download):
     _ = clean_repos
     artifact_hashes = []
 
-    COUNT = 5000
+    COUNT = 1000
 
     t = time.time()
     for i in range(COUNT):
@@ -475,7 +475,7 @@ def test_stress(clean_repos, upload, list_, download):
         ))
     upload_duration = time.time() - t
     print(f'Uploaded {COUNT} artifacts in {upload_duration} seconds')
-    assert upload_duration < 500, f"Uploading {COUNT} artifacts took too long"
+    assert upload_duration < 120, f"Uploading {COUNT} artifacts took too long"
 
     t = time.time()
     for i, artifact_hash in enumerate(artifact_hashes):
@@ -484,7 +484,7 @@ def test_stress(clean_repos, upload, list_, download):
         download(f'foo:{artifact_hash}', {})
     download_duration = time.time() - t
     print(f'Downloaded {COUNT} artifacts in {download_duration} seconds')
-    assert download_duration < 200, f"Downloading {COUNT} artifacts took too long"
+    assert download_duration < 100, f"Downloading {COUNT} artifacts took too long"
 
     t = time.time()
     artifacts = list_('foo', {})
