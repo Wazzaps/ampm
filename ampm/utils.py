@@ -1,3 +1,4 @@
+import atexit
 import hashlib
 import os
 from pathlib import Path
@@ -43,3 +44,7 @@ def randbytes(length: int) -> bytes:
     """
     import random
     return bytes(random.getrandbits(8) for _ in range(length))
+
+
+def remove_atexit(path: Path):
+    atexit.register(lambda f: f.unlink(missing_ok=True), path)

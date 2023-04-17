@@ -10,6 +10,3 @@ elif [ "$#" -eq 2 ] && [ "$1" = "env" ] && echo "$2" | grep -P '^.*:[a-z0-9]{32}
 else
   "/opt/ampm/ampm" "$@"
 fi
-
-# Remove temporary files
-rm -f /tmp/ampm_tmp_*
