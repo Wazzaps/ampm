@@ -1,5 +1,6 @@
 import json
 import gzip
+import multiprocessing
 import re
 import subprocess
 import tarfile
@@ -493,6 +494,7 @@ def test_stress(clean_repos, upload, list_, download):
     print(f'Listed {COUNT} artifacts in {list_duration} seconds')
     assert list_duration < 5, f"Listing {COUNT} artifacts took too long"
 
+
 @pytest.mark.parametrize('is_compressed', ['compressed', 'uncompressed'])
 def test_download_big_file(clean_repos, upload, download, big_file, is_compressed):
     _ = clean_repos
@@ -503,3 +505,32 @@ def test_download_big_file(clean_repos, upload, download, big_file, is_compresse
     )
     artifact_path = download(f'foo:{artifact_hash}', {})
     assert_files_identical(artifact_path, big_file)
+
+
+@pytest.mark.parametrize('is_compressed', ['compressed', 'uncompressed'])
+def test_parallel_download_single_file(clean_repos, upload, download, big_file, is_compressed):
+    _ = clean_repos
+
+    artifact1_hash = upload(
+        str(big_file),
+        artifact_type='foo',
+        compressed=is_compressed == 'compressed'
+    )
+    artifact2_hash = upload(
+        str(big_file),
+        artifact_type='foo',
+        compressed=is_compressed == 'compressed'
+    )
+
+    threads = []
+    for artifact_hash in (artifact1_hash, artifact2_hash):
+        def inner():
+            artifact_path = download(f'foo:{artifact_hash}', {})
+            assert_files_identical(artifact_path, big_file)
+
+        t = multiprocessing.Process(target=inner)
+        threads.append(t)
+        t.start()
+
+    for t in threads:
+        t.join(timeout=60)
