@@ -119,6 +119,29 @@ def _format_artifact_metadata(artifact_metadata: ArtifactMetadata) -> str:
            f'\n{combined_attrs}'
 
 
+def _short_format_artifact_metadata(artifact_metadata: ArtifactMetadata) -> str:
+    combined_attrs = artifact_metadata.combined_attrs
+
+    parts = [
+        f'{k}={repr(v)}'
+        for k, v in combined_attrs.items()
+    ]
+
+    return f'{artifact_metadata.type}:{artifact_metadata.hash}\t{" ".join(sorted(parts))}'
+
+
+def _index_file_format_artifact_metadata(artifact_metadata: ArtifactMetadata, prefix: str) -> str:
+    combined_attrs = artifact_metadata.combined_attrs
+
+    parts = [
+        f'{k}={repr(v)}'
+        for k, v in combined_attrs.items()
+    ]
+    return f'{artifact_metadata.type}:{artifact_metadata.hash}\t' \
+           f'{" ".join(sorted(parts))}\t' \
+           f'{prefix}/{artifact_metadata.type.lower()}/{artifact_metadata.hash.lower()}/{artifact_metadata.name}'
+
+
 def verify_type(artifact_type: str):
     if ':' in artifact_type:
         raise click.BadParameter(f'Artifact type cannot contain ":": {artifact_type}')
@@ -160,14 +183,15 @@ def get(ctx: click.Context, identifier: str, attr: Dict[str, str]):
 @cli.command(name='list')
 @click.argument('IDENTIFIER', required=False)
 @click.option('-a', '--attr', help='Artifact attributes', multiple=True, callback=_parse_dict)
+@click.option('--index-file-prefix', help='When using --format=index-file, add this prefix to the artifact file path')
 @click.option(
     '-f', '--format', 'output_format',
-    type=click.Choice(['pretty', 'json']),
+    type=click.Choice(['pretty', 'json', 'short', 'index-file']),
     help='Output format',
     default='pretty',
 )
 @click.pass_context
-def list_(ctx: click.Context, identifier: Optional[str], attr: Dict[str, str], output_format: str):
+def list_(ctx: click.Context, identifier: Optional[str], attr: Dict[str, str], index_file_prefix: str, output_format: str):
     """
         Get info about artifacts
 
@@ -191,6 +215,10 @@ def list_(ctx: click.Context, identifier: Optional[str], attr: Dict[str, str], o
             print('\n\n'.join(_format_artifact_metadata(artifact_metadata) for artifact_metadata in artifacts))
         elif output_format == 'json':
             print(json.dumps([artifact_metadata.to_dict() for artifact_metadata in artifacts], indent=4))
+        elif output_format == 'short':
+            print('\n'.join(_short_format_artifact_metadata(artifact_metadata) for artifact_metadata in artifacts))
+        elif output_format == 'index-file':
+            print('\n'.join(_index_file_format_artifact_metadata(artifact_metadata, index_file_prefix or '') for artifact_metadata in artifacts))
         else:
             raise ValueError(f'Unknown output format: {output_format}')
 
