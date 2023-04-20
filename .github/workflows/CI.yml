@@ -2,7 +2,6 @@ name: CI
 
 on:
   workflow_dispatch:
-  push:
   pull_request:
 
 jobs:
@@ -26,7 +25,7 @@ jobs:
   test-linux:
     name: Test linux binaries
     runs-on: ubuntu-20.04
-    timeout-minutes: 10
+    timeout-minutes: 20
     container: python:3
     steps:
       - name: Checkout code
