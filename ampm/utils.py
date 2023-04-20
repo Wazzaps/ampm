@@ -64,6 +64,7 @@ class LockFile:
         waited_for = 0
         while True:
             try:
+                self.path.parent.mkdir(parents=True, exist_ok=True)
                 self.lockfile = self.path.open('x')
                 self.refresh()
                 break
