@@ -6,11 +6,13 @@ from pathlib import Path
 from typing import Iterable, Optional
 from ampm.attribute_comparators import COMPARATORS
 from ampm.repo.base import ArtifactRepo, ArtifactQuery, ArtifactMetadata, QueryNotFoundError, AmbiguousComparisonError
+from ampm.utils import LockFile
 
 
 class LocalRepo(ArtifactRepo):
     def __init__(self, path: Path):
         self.path = path
+        self.metadata_lockfile = LockFile(self.path / 'metadata.lock', 'metadata lock')
 
     @staticmethod
     def from_uri_part(uri_part: str) -> "LocalRepo":

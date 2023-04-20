@@ -508,7 +508,7 @@ def test_download_big_file(clean_repos, upload, download, big_file, is_compresse
 
 
 @pytest.mark.parametrize('is_compressed', ['compressed', 'uncompressed'])
-def test_parallel_download_single_file(clean_repos, upload, download, big_file, is_compressed):
+def test_parallel_download_multiple_single_file(clean_repos, upload, download, big_file, is_compressed):
     _ = clean_repos
 
     artifact1_hash = upload(
@@ -524,6 +524,30 @@ def test_parallel_download_single_file(clean_repos, upload, download, big_file, 
 
     threads = []
     for artifact_hash in (artifact1_hash, artifact2_hash):
+        def inner():
+            artifact_path = download(f'foo:{artifact_hash}', {})
+            assert_files_identical(artifact_path, big_file)
+
+        t = multiprocessing.Process(target=inner)
+        threads.append(t)
+        t.start()
+
+    for t in threads:
+        t.join(timeout=60)
+
+
+@pytest.mark.parametrize('is_compressed', ['compressed', 'uncompressed'])
+def test_parallel_download_single_single_file(clean_repos, upload, download, big_file, is_compressed):
+    _ = clean_repos
+
+    artifact_hash = upload(
+        str(big_file),
+        artifact_type='foo',
+        compressed=is_compressed == 'compressed'
+    )
+
+    threads = []
+    for _ in range(5):
         def inner():
             artifact_path = download(f'foo:{artifact_hash}', {})
             assert_files_identical(artifact_path, big_file)

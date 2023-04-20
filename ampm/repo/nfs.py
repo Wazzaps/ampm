@@ -6,6 +6,7 @@ import sys
 import re
 import shutil
 import threading
+import time
 from math import ceil
 from pathlib import Path
 from typing import List, Iterable, ContextManager, Optional
@@ -18,7 +19,7 @@ from pyNfsClient import (Portmap, Mount, NFSv3, MNT3_OK, NFS_PROGRAM,
 from ampm.repo.base import ArtifactRepo, ArtifactMetadata, ArtifactQuery, QueryNotFoundError, ARTIFACT_TYPES, \
     ArtifactCorruptedError, NiceTrySagi
 from ampm.repo.local import LOCAL_REPO
-from ampm.utils import _calc_dir_size
+from ampm.utils import _calc_dir_size, remove_atexit, LockFile
 
 DEFAULT_CHUNK_SIZE = 1024 * 256
 NFS_OP_TIMEOUT_SEC = 16
@@ -317,7 +318,7 @@ class NfsConnection:
 
         for remote_file_path in self.walk_files(remote_path):
             if got_one_file:
-                hasher = None  # Only hash one file
+                hasher = None  # Disable hashing if we're downloading multiple files
             local_file_path = local_path / remote_file_path[len(remote_path):].strip('/')
             local_file_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -474,36 +475,59 @@ class NfsRepo(ArtifactRepo):
         with self.nfs.connected():
             if query.is_exact:
                 # print('Downloading metadata')
-                metadata_path = LOCAL_REPO.metadata_path_of(query.type, query.hash, '.toml')
-                tmp_metadata_path = Path(str(metadata_path) + '.tmp')
-                tmp_metadata_path.parent.mkdir(parents=True, exist_ok=True)
-                tmp_metadata_path.unlink(missing_ok=True)
+                with LOCAL_REPO.metadata_lockfile:
+                    metadata_path = LOCAL_REPO.metadata_path_of(query.type, query.hash, '.toml')
+                    tmp_metadata_path = Path(str(metadata_path) + '.tmp')
+                    tmp_metadata_path.parent.mkdir(parents=True, exist_ok=True)
+                    tmp_metadata_path.unlink(missing_ok=True)
 
-                try:
-                    self.nfs.download(tmp_metadata_path, self.metadata_path_of(query.type, query.hash))
-                except ConnectionError:
-                    raise
-                except IOError:
-                    raise QueryNotFoundError(query)
+                    try:
+                        self.nfs.download(tmp_metadata_path, self.metadata_path_of(query.type, query.hash))
+                    except ConnectionError:
+                        raise
+                    except IOError:
+                        raise QueryNotFoundError(query)
 
-                metadata = ArtifactMetadata.from_dict(toml.load(tmp_metadata_path))
-                tmp_metadata_path.rename(metadata_path)
-                yield metadata
+                    metadata = ArtifactMetadata.from_dict(toml.load(tmp_metadata_path))
+                    tmp_metadata_path.rename(metadata_path)
+                    yield metadata
 
     def download(self, metadata: ArtifactMetadata) -> Path:
         tmp_local_base_path = LOCAL_REPO.artifact_base_path_of(metadata, '.tmp')
+        lockfile = LockFile(
+            LOCAL_REPO.artifact_base_path_of(metadata, '.lock'),
+            f'artifact {metadata.type}:{metadata.hash}',
+        )
         tmp_local_path = LOCAL_REPO.artifact_path_of(metadata, '.tmp')
         local_base_path = LOCAL_REPO.artifact_base_path_of(metadata)
         remote_path = self.artifact_path_of(metadata)
         remote_base_path = self.artifact_base_path_of(metadata)
+
+        tmp_local_base_path.parent.mkdir(parents=True, exist_ok=True)
+        lockfile.take()
+        remove_atexit(lockfile.path)
+
+        # In case a concurrent ampm already downloaded this
+        if local_base_path.exists():
+            return LOCAL_REPO.artifact_path_of(metadata)
 
         shutil.rmtree(tmp_local_base_path, ignore_errors=True)
         shutil.rmtree(local_base_path, ignore_errors=True)
 
         actual_hash = None
 
+        is_done = False
+
+        def lockfile_updater():
+            while not is_done:
+                lockfile.refresh()
+                time.sleep(1)
+
         with self.nfs.connected():
             tmp_local_base_path.mkdir(parents=True, exist_ok=True)
+            lockfile_updater_thread = threading.Thread(target=lockfile_updater)
+            lockfile_updater_thread.start()
+
             if metadata.path_type == 'file' or metadata.path_type == 'dir':
                 if metadata.path_location:
                     actual_hash = self.nfs.download(tmp_local_base_path / metadata.name, remote_base_path, progress_bar=True)
@@ -555,11 +579,16 @@ class NfsRepo(ArtifactRepo):
 
                 actual_hash = hasher.hexdigest()
             else:
+                is_done = True
+                lockfile_updater_thread.join()
                 raise ValueError(f'Unknown artifact type: {metadata.path_type}')
+
+            is_done = True
+            lockfile_updater_thread.join()
 
         if metadata.path_hash and actual_hash and metadata.path_hash != actual_hash:
             raise ArtifactCorruptedError(f'Hash mismatch for {metadata.type}:{metadata.hash}: '
-                                         f'{metadata.path_hash} != {actual_hash}')
+                                         f'{metadata.path_hash} != {actual_hash}, Did someone modify the artifact on the server by hand?')
 
         LOCAL_REPO.generate_caches_for_artifact(metadata)
         tmp_local_base_path.rename(local_base_path)
