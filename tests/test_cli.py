@@ -69,11 +69,11 @@ def download(nfs_repo_uri):
 
 @pytest.fixture()
 def list_(nfs_repo_uri):
-    def _list_(identifier: str, attributes: Dict[str, str]) -> dict:
-        runner = CliRunner(mix_stderr=False, env={'AMPM_SERVER': nfs_repo_uri})
+    def _list_(identifier: str, attributes: Dict[str, str], offline=False, override_server=None) -> dict:
+        runner = CliRunner(mix_stderr=False, env={'AMPM_SERVER': override_server or nfs_repo_uri})
         result = runner.invoke(
             ampm.cli.cli,
-            ['list', identifier, '--format=json'] + [f'--attr={k}={v}' for k, v in attributes.items()],
+            (['--offline'] if offline else []) + ['list', identifier, '--format=json'] + [f'--attr={k}={v}' for k, v in attributes.items()],
             catch_exceptions=False
         )
         formatted_output = f'== STDERR ==\n{result.stderr}\n\n== STDOUT ==\n{result.stdout}'
@@ -558,3 +558,22 @@ def test_parallel_download_single_single_file(clean_repos, upload, download, big
 
     for t in threads:
         t.join(timeout=60)
+
+
+def test_offline(clean_repos, upload, list_):
+    _ = clean_repos
+
+    upload(
+        'tests/dummy_data/foobar.txt',
+        artifact_type='foo',
+        compressed=False,
+    )
+
+    assert list_('foo', {}, offline=True, override_server='SHOULDNT_BE_USED') == [], \
+        'Local index shouldn\'t have been updated yet, offline mode broken'
+
+    online_list = list_('foo', {})
+    assert len(online_list), 'No artifacts found in online listing'
+
+    offline_list = list_('foo', {}, offline=True, override_server='SHOULDNT_BE_USED')
+    assert online_list == offline_list, 'Offline listing was different than cached listing'

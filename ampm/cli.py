@@ -33,15 +33,19 @@ class OrderedGroup(click.Group):
 @click.group(cls=OrderedGroup)
 @click.version_option(__version__)
 @click.option('-s', '--server', help=f'Remote repository server (default: {REMOTE_REPO_URI})')
+@click.option('--offline', is_flag=True, help=f'Don\'t try to contact the remote repository server')
 @click.pass_context
-def cli(ctx: click.Context, server: Optional[str]):
+def cli(ctx: click.Context, server: Optional[str], offline: bool):
     ctx.ensure_object(dict)
-    if server is not None:
-        ctx.obj['server'] = server
-    elif 'AMPM_SERVER' in os.environ:
-        ctx.obj['server'] = os.environ['AMPM_SERVER']
-    else:
-        ctx.obj['server'] = REMOTE_REPO_URI
+
+    ctx.obj['server'] = None
+    if not offline:
+        if server is not None:
+            ctx.obj['server'] = server
+        elif 'AMPM_SERVER' in os.environ:
+            ctx.obj['server'] = os.environ['AMPM_SERVER']
+        else:
+            ctx.obj['server'] = REMOTE_REPO_URI
 
 
 def _parse_dict(_ctx, _param, value: Tuple[str]):
