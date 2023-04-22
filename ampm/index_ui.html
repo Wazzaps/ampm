@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ampm index</title>
+    <style>
+        body {
+            font-family: "Segoe UI", sans-serif;
+            max-width: 60rem;
+            margin: 0 auto;
+            padding: 2rem 1rem;
+            background: #d2d0d0;
+            color: #000;
+        }
+        .artifact-list {
+            list-style-type: none;
+            margin: 0;
+            padding: 0;
+        }
+        .artifact-list > li {
+            margin-bottom: 0.75rem;
+        }
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+        .container {
+            background: #eee;
+            padding: 0.5rem;
+            border: 1px solid #777;
+        }
+        .title {
+            display: flex;
+            justify-content: space-between;
+            font-family: monospace, sans-serif;
+            margin-bottom: 0.5rem;
+        }
+        .title a {
+            padding-left: 1rem;
+        }
+        .attrs {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: flex-start;
+        }
+        .attrs > div {
+            margin-right: 0.3rem;
+            margin-bottom: 0.3rem;
+        }
+        .attr {
+            background: #fff;
+            line-height: 1.75rem;
+            padding-right: 0.4rem;
+            padding-left: 0.4rem;
+            border: 1px solid #222;
+        }
+        .attr_name {
+            display: inline-block;
+            padding-right: 0.4rem;
+            padding-left: 0.4rem;
+            height: 1.75rem;
+            margin-left: -0.4rem;
+            margin-right: 0.1rem;
+            background: #ccc;
+            color: #000;
+        }
+        .attr_val {
+            color: #222;
+            font-family: monospace, sans-serif;
+            white-space: pre-wrap;
+        }
+        .search-area {
+            padding-bottom: 1rem;
+            margin-bottom: 1.5rem;
+            border-bottom: 1px dashed #777;
+        }
+        .labeled {
+            display: flex;
+            flex-direction: column;
+            margin-bottom: 0.5rem;
+        }
+        .labeled label {
+            margin-bottom: 0.2rem;
+            font-size: 14px;
+            font-weight: bold;
+        }
+        .horiz {
+            display: flex;
+            gap: 0.75rem;
+        }
+        .horiz > .grow1 {
+            flex-grow: 1;
+        }
+        .horiz > .grow2 {
+            flex-grow: 2;
+        }
+        .attr-op {
+            color: #666;
+            font-style: italic;
+        }
+        .attr-filter-list {
+            margin: 0;
+            padding-inline-start: 1.5rem;
+            list-style-type: none;
+        }
+        .attr-filter-list > li {
+            margin-top: 0.25rem;
+        }
+        .attr-filter-list > li:before {
+            content: "-";
+            text-indent: -1rem;
+            float: left;
+        }
+        .highlight {
+            background: #eeee00;
+            outline: 2px solid #a9a300;
+            color: #000;
+        }
+        .container a {
+            color: #115e8a;
+        }
+        #reloading {
+            display: none;
+        }
+
+        @media (prefers-color-scheme: dark) {
+            body {
+                background: #363534;
+                color: #d7d7d7;
+            }
+            .container {
+                background: #424140;
+                color: #e1e1e1;
+            }
+            .attr {
+                background: #2f2e2d;
+            }
+            .attr_name {
+                background: #1e1d1d;
+                color: #fff;
+            }
+            .attr_val {
+                color: #c0c0c0;
+            }
+            .attr-op {
+                color: #838383;
+            }
+            .highlight {
+                background: #525200;
+                color: #fff;
+            }
+            .container a {
+                color: #55bbff;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>ampm index</h1>
+        <h3 id="reloading">Reloading...</h3>
+        <span id="result-count">{{pretty_count}}</span>
+    </div>
+    <div class="search-area">
+        <div class="horiz">
+            <div class="labeled grow2">
+                <label for="search">Search</label>
+                <input id="search" type="text" oninput="throttledReload()">
+            </div>
+            <div class="labeled grow1">
+                <label>Artifact Type</label>
+                <select onchange="throttledReload()">
+                    <option>*</option>
+                    <option>foo</option>
+                    <option>foo/bar</option>
+                    <option>baz</option>
+                </select>
+            </div>
+        </div>
+        <div class="labeled">
+            <label>Attribute Filters</label>
+            <ul class="attr-filter-list">
+                <li>
+                    <div id="attr-selector">
+                        <select id="attr-selector-attr">
+                            <option>a</option>
+                            <option>b</option>
+                            <option>description</option>
+                            <option>pubdate</option>
+                        </select>
+                        <select id="attr-selector-op">
+                            <option>contains</option>
+                            <option>equals</option>
+                            <option>starts with</option>
+                            <option>ends with</option>
+                            <option>matches regex</option>
+                        </select>
+                        <input id="attr-selector-input" onkeyup="if (event.keyCode === 13) {addAttrFilter()}">
+                        <button onclick="addAttrFilter()">+</button>
+                    </div>
+                </li>
+            </ul>
+        </div>
+    </div>
+    <ul class="artifact-list">
+        {{foreach_artifact}}
+        <li data-type={{quoted_type}}>
+            <div class="container">
+                <div class="title">
+                    <span><span class="ident">{{ident}}</span> &ndash; <span class="name">{{name}}</span></span>
+                    <a href={{quoted_link}}>Link</a>
+                </div>
+                <div class="attrs">
+                    {{foreach_attr}}
+                    <div class="attr"><span class="attr_name">{{attr_name}}</span> <span class="attr_val">{{attr_val}}</span></div>
+                    {{end_foreach_attr}}
+                </div>
+            </div>
+        </li>
+        {{end_foreach_artifact}}
+    </ul>
+    <h3>Built on {{build_date}}</h3>
+    <script>
+        let attrFilters = [];
+
+        function addAttrFilter() {
+            const attr_selector = document.getElementById("attr-selector");
+            const attr_selector_attr = document.getElementById("attr-selector-attr").value;
+            const attr_selector_op = document.getElementById("attr-selector-op").value;
+            const attr_selector_input = document.getElementById("attr-selector-input").value;
+            const new_attr = document.createElement("li");
+            new_attr.classList.add("attr-filter");
+            new_attr.innerHTML = `<button onclick="removeAttrFilter(this.parentNode)">X</button> ${attr_selector_attr} <span class=attr-op>${attr_selector_op}</span> "${attr_selector_input}"`
+            attr_selector.parentNode.parentNode.insertBefore(new_attr, attr_selector.parentNode);
+            attrFilters.push({
+                attr: attr_selector_attr,
+                op: attr_selector_op,
+                val: attr_selector_input,
+            });
+            throttledReload();
+        }
+
+        function removeAttrFilter(el) {
+            const index = Array.prototype.indexOf.call(el.parentNode.children, el);
+            el.remove();
+            attrFilters.splice(index, 1);
+            throttledReload();
+        }
+
+        function filterArtifact(artifact, type_filter, search, encountered_attrs) {
+            const type = artifact.getAttribute("data-type");
+
+            // Filter by type
+            if (type_filter !== "*" && type !== type_filter && !type.startsWith(type_filter + "/")) {
+                return false;
+            }
+
+            const iden = artifact.getElementsByClassName("ident")[0];
+            const name = artifact.getElementsByClassName("name")[0];
+            // Initialize criteria with artifact ident and name
+            let search_criteria = [iden, name];
+
+            // Filter by attributes
+            const attrs = artifact.getElementsByClassName("attr");
+            for (const attr of attrs) {
+                const attr_name = attr.getElementsByClassName("attr_name")[0].innerText;
+                const attr_val_elem = attr.getElementsByClassName("attr_val")[0];
+                const attr_val = attr_val_elem.innerText;
+                for (const filter of attrFilters) {
+                    if (filter.attr === attr_name) {
+                        if (filter.op === "contains") {
+                            if (!attr_val.includes(filter.val)) {
+                                return false;
+                            }
+                        } else if (filter.op === "equals") {
+                            if (attr_val !== filter.val) {
+                                return false;
+                            }
+                        } else if (filter.op === "starts with") {
+                            if (!attr_val.startsWith(filter.val)) {
+                                return false;
+                            }
+                        } else if (filter.op === "ends with") {
+                            if (!attr_val.endsWith(filter.val)) {
+                                return false;
+                            }
+                        } else if (filter.op === "matches regex") {
+                            if (filter.regex === undefined) {
+                                filter.regex = new RegExp(filter.val);
+                            }
+                            if (!filter.regex.test(attr_val)) {
+                                return false;
+                            }
+                        }
+                    }
+                }
+                search_criteria.push(attr_val_elem);
+            }
+
+            // Filter by free text
+            if (search !== null) {
+                let result = false;
+                for (const criterion of search_criteria) {
+                    criterion.innerHTML = criterion.innerText.replace(search, "<span class='highlight'>$&</span>");
+                    if (search.test(criterion.innerText)) {
+                        result = true;
+                    }
+                }
+                if (!result) {
+                    return false;
+                }
+            } else {
+                for (const criterion of search_criteria) {
+                    criterion.innerHTML = criterion.innerText;
+                }
+            }
+
+            // Add attributes to encountered attributes
+            for (const attr of attrs) {
+                const attr_name = attr.getElementsByClassName("attr_name")[0].innerText;
+                encountered_attrs.add(attr_name);
+            }
+            return true;
+        }
+
+        function escapeRegex(string) {
+            return string.replace(/[/\-\\^$*+?.()|[\]{}]/g, '\\$&');
+        }
+
+        async function reload() {
+            console.time("reload");
+            const reloading = document.getElementById("reloading");
+            reloading.style.display = "block";
+
+            const artifact_list = document.getElementsByClassName("artifact-list")[0];
+            const result_count = document.getElementById("result-count");
+            const search = document.getElementById("search").value.toLowerCase();
+            const type_filter = document.getElementsByTagName("select")[0].value;
+
+            const artifact_list_clone = artifact_list.cloneNode(true);
+            const search_regex = search !== "" ? new RegExp(escapeRegex(search), "ig") : null;
+            let counter = 0;
+            let encountered_attrs = new Set();
+
+            // Filter attributes
+            for (const artifact of artifact_list_clone.children) {
+                if (filterArtifact(artifact, type_filter, search_regex, encountered_attrs)) {
+                    counter++;
+                    artifact.style.display = "block";
+                } else {
+                    artifact.style.display = "none";
+                }
+            }
+
+            // Update counter
+            if (counter === 1) {
+                result_count.innerText = "1 Result";
+            } else {
+                result_count.innerText = `${counter} Results`;
+            }
+
+            // Update encountered attributes
+            const attr_selector = document.getElementById("attr-selector-attr");
+            encountered_attrs = [...encountered_attrs];
+            encountered_attrs.sort();
+            attr_selector.innerHTML = encountered_attrs.map(a => `<option>${a}</option>`).join("");
+
+            // Update
+            artifact_list.replaceWith(artifact_list_clone);
+            reloading.style.display = "none";
+            console.timeEnd("reload");
+        }
+
+        let timer = null;
+        function throttledReload() {
+            if (timer === null) {
+                reload();
+                timer = setTimeout(() => {
+                    timer = null;
+                }, 500);
+            } else {
+                clearTimeout(timer);
+                timer = setTimeout(() => {
+                    timer = null;
+                    reload();
+                }, 500);
+            }
+        }
+
+        reload();
+    </script>
+</body>
+</html>

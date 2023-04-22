@@ -5,7 +5,8 @@ set -ex
 cd "$( cd -- "$(dirname "$0")" >/dev/null 2>&1 ; pwd -P )"
 
 rm -rf ./dist ./build
-docker run --rm --env=PYTHONPATH='/code/vendor' --env=GITHUB_WORKSPACE='/code' -v "$PWD":/code wazzaps/pyinstaller-manylinux-py38 --clean --noconfirm --name=ampm --add-binary /usr/local/lib/libcrypt.so.2:. /code/ampm/cli.py
+minify ./ampm/index_ui.html -o ./ampm/index_ui.min.html
+docker run --rm --env=PYTHONPATH='/code/vendor' --env=GITHUB_WORKSPACE='/code' -v "$PWD":/code wazzaps/pyinstaller-manylinux-py38 --clean --noconfirm --name=ampm --add-binary /usr/local/lib/libcrypt.so.2:. --add-data /code/ampm/index_ui.html:. --add-data /code/ampm/index_ui.min.html:. /code/ampm/cli.py
 strip ./dist/ampm/*so* ./dist/ampm/ampm ./dist/ampm/lib-dynload/*
 cp ./ampm/ampm.sh ./dist/ampm/ampm.sh
 cp ./ampm/uninstall.sh ./dist/ampm/uninstall.sh

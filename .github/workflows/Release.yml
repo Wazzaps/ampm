@@ -12,6 +12,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v2
+      - name: Install apt dependencies
+        run: sudo apt update -y && sudo apt install -y minify
       - name: Build
         run: ./build.sh
       - name: Create release

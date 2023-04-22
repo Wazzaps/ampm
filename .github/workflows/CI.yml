@@ -5,23 +5,25 @@ on:
   pull_request:
 
 jobs:
-#  build-linux:
-#    name: Build linux binaries
-#    runs-on: ubuntu-20.04
-#    timeout-minutes: 10
-#    steps:
-#      - name: Checkout code
-#        uses: actions/checkout@v2
-#      - name: Build
-#        run: ./build.sh
-#      - name: Upload results
-#        uses: actions/upload-artifact@v3
-#        with:
-#          name: ampm-linux-binaries
-#          if-no-files-found: error
-#          path: |
-#            dist/ampm.tar.gz
-#            dist/get_ampm.sh
+  build-linux:
+    name: Build linux binaries
+    runs-on: ubuntu-20.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+      - name: Install apt dependencies
+        run: sudo apt update -y && sudo apt install -y minify
+      - name: Build
+        run: ./build.sh
+      - name: Upload results
+        uses: actions/upload-artifact@v3
+        with:
+          name: ampm-linux-binaries
+          if-no-files-found: error
+          path: |
+            dist/ampm.tar.gz
+            dist/get_ampm.sh
   test-linux:
     name: Test linux binaries
     runs-on: ubuntu-20.04
@@ -34,7 +36,7 @@ jobs:
         uses: actions/setup-python@v2
         with:
           python-version: "3.8"
-      - name: Install tirpc
+      - name: Install apt dependencies
         run: apt update -y && apt install -y libtirpc3 python3-pip rpcbind
       - name: Install dependencies
         run: python3 -m pip install pytest

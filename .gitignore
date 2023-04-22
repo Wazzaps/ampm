@@ -131,3 +131,6 @@ dmypy.json
 # Pyre type checker
 .pyre/
 .idea/
+
+/ampm/index_ui.min.html
+/ampm/index_ui.rnd.html

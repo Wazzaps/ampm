@@ -2,7 +2,6 @@ import collections
 import contextlib
 import datetime
 import gzip
-import hashlib
 import json
 import os
 import sys
@@ -10,7 +9,7 @@ import tarfile
 import tqdm
 import click
 import colorama
-from typing import Tuple, Optional, Dict, Mapping
+from typing import Tuple, Optional, Dict, Mapping, List
 from math import ceil
 from pathlib import Path
 from ampm.repo.base import ArtifactQuery, AmbiguousQueryError, RepoGroup, QueryNotFoundError, \
@@ -131,6 +130,10 @@ def _short_format_artifact_metadata(artifact_metadata: ArtifactMetadata) -> str:
     return f'{artifact_metadata.type}:{artifact_metadata.hash}\t{" ".join(sorted(parts))}'
 
 
+def _make_link(artifact_metadata: ArtifactMetadata, prefix: str) -> str:
+    return f'{prefix}/{artifact_metadata.type.lower()}/{artifact_metadata.hash.lower()}/{artifact_metadata.name}'
+
+
 def _index_file_format_artifact_metadata(artifact_metadata: ArtifactMetadata, prefix: str) -> str:
     combined_attrs = artifact_metadata.combined_attrs
 
@@ -140,7 +143,56 @@ def _index_file_format_artifact_metadata(artifact_metadata: ArtifactMetadata, pr
     ]
     return f'{artifact_metadata.type}:{artifact_metadata.hash}\t' \
            f'{" ".join(sorted(parts))}\t' \
-           f'{prefix}/{artifact_metadata.type.lower()}/{artifact_metadata.hash.lower()}/{artifact_metadata.name}'
+           f'{_make_link(artifact_metadata, prefix)}'
+
+
+def _index_web_format_artifact_metadata(artifacts: List[ArtifactMetadata], index_webpage_template: str, prefix: str) -> str:
+    preamble, _, rest = index_webpage_template.partition('{{foreach_artifact}}')
+    foreach_artifact, _, postamble = rest.partition('{{end_foreach_artifact}}')
+    artifacts = list(artifacts)
+
+    def process_global_changes(inp, artifact_count):
+        return inp \
+            .replace('{{pretty_count}}', f'{artifact_count} Result' + ('s' if artifact_count != 1 else '')) \
+            .replace('{{build_date}}', datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+
+    def process_artifact_changes(inp, artifact_count, artifact):
+        return process_global_changes(inp, artifact_count) \
+            .replace('{{quoted_type}}', f'"{artifact.type}"') \
+            .replace('{{ident}}', f'{artifact.type}:{artifact.hash}') \
+            .replace('{{name}}', artifact.name)\
+            .replace('{{quoted_link}}', f'"{_make_link(artifact, prefix)}"')
+
+    def process_attr_changes(inp, artifact_count, artifact, k, v):
+        return process_artifact_changes(inp, artifact_count, artifact) \
+            .replace('{{attr_name}}', k) \
+            .replace('{{attr_val}}', v)
+
+    result = process_global_changes(preamble, len(artifacts))
+    for artifact in artifacts:
+        artifact_preamble, _, rest = foreach_artifact.partition('{{foreach_attr}}')
+        foreach_attr, _, artifact_postamble = rest.partition('{{end_foreach_attr}}')
+        artifact_result = process_artifact_changes(artifact_preamble, len(artifacts), artifact)
+
+        attrs = artifact.combined_attrs.copy()
+        # Name is shown elsewhere
+        del attrs['name']
+        # Show description first, if not empty, and pubdate last
+        desc = attrs.pop('description', None)
+        pubdate = attrs.pop('pubdate')
+        attrs = list(attrs.items())
+        if desc:
+            attrs.insert(0, ('description', desc))
+        attrs.append(('pubdate', pubdate))
+
+        for k, v in attrs:
+            artifact_result += process_attr_changes(foreach_attr, len(artifacts), artifact, k, v)
+
+        artifact_result += process_artifact_changes(artifact_postamble, len(artifacts), artifact)
+        result += artifact_result
+
+    result += process_global_changes(postamble, len(artifacts))
+    return result
 
 
 def verify_type(artifact_type: str):
@@ -184,15 +236,23 @@ def get(ctx: click.Context, identifier: str, attr: Dict[str, str]):
 @cli.command(name='list')
 @click.argument('IDENTIFIER', required=False)
 @click.option('-a', '--attr', help='Artifact attributes', multiple=True, callback=_parse_dict)
-@click.option('--index-file-prefix', help='When using --format=index-file, add this prefix to the artifact file path')
+@click.option('--index-file-prefix', help='When using --format=index-file or --format=index-webpage, add this prefix to the artifact file path')
+@click.option('--index-webpage-template', help='When using --format=index-webpage, use this as a template', type=click.Path(exists=True, path_type=Path))
 @click.option(
     '-f', '--format', 'output_format',
-    type=click.Choice(['pretty', 'json', 'short', 'index-file']),
+    type=click.Choice(['pretty', 'json', 'short', 'index-file', 'index-webpage']),
     help='Output format',
     default='pretty',
 )
 @click.pass_context
-def list_(ctx: click.Context, identifier: Optional[str], attr: Dict[str, str], index_file_prefix: str, output_format: str):
+def list_(
+    ctx: click.Context,
+    identifier: Optional[str],
+    attr: Dict[str, str],
+    index_file_prefix: Optional[str],
+    index_webpage_template: Optional[Path],
+    output_format: str
+):
     """
         Get info about artifacts
 
@@ -220,6 +280,10 @@ def list_(ctx: click.Context, identifier: Optional[str], attr: Dict[str, str], i
             print('\n'.join(_short_format_artifact_metadata(artifact_metadata) for artifact_metadata in artifacts))
         elif output_format == 'index-file':
             print('\n'.join(_index_file_format_artifact_metadata(artifact_metadata, index_file_prefix or '') for artifact_metadata in artifacts))
+        elif output_format == 'index-webpage':
+            if index_webpage_template is None:
+                index_webpage_template = Path(__file__).parent / 'index_ui.min.html'
+            print(_index_web_format_artifact_metadata(artifacts, index_webpage_template.read_text(), index_file_prefix))
         else:
             raise ValueError(f'Unknown output format: {output_format}')
 
