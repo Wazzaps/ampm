@@ -83,11 +83,23 @@ ampm list
 # List all artifacts with json output
 ampm list foobar --format=json
 
+# List all artifacts with short output (type:hash  <attr>=<value>...)
+ampm list foobar --format=json
+
+# List all artifacts with index-file output (type:hash  <attr>=<value>...  <prefix>/<path>)
+ampm list foobar --format=index-file --index-file-prefix='http://other/way/to/access/the/repo'
+
+# List all artifacts present in local cache (don't contact server)
+ampm --offline list
+
 # Prints a shell script that can be sourced to export the artifact's env vars
 ampm env foobar:mbf5qxqli76zx7btc5n7fkq47tjs6cl2
 
 # Custom NFS server
 ampm --server='nfs://1.2.3.4/some/repo' get foobar:mbf5qxqli76zx7btc5n7fkq47tjs6cl2
+
+# Remove artifact from server (must be precise hash), Make sure no one is using the artifact!
+ampm remote-rm --i-realise-this-may-break-other-peoples-builds-in-the-future foobar:mbf5qxqli76zx7btc5n7fkq47tjs6cl2
 ```
 
 ## Hash calculation algorithm
