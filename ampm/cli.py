@@ -4,6 +4,8 @@ import datetime
 import gzip
 import json
 import os
+import subprocess
+import tempfile
 import sys
 import tarfile
 import tqdm
@@ -480,6 +482,31 @@ def remote_rm(ctx: click.Context, artifact: str, i_realise_this_may_break_other_
 
     remote_repo: NfsRepo = ArtifactRepo.by_uri(ctx.obj['server'])
     remote_repo.remove_artifact(artifact)
+
+
+@cli.command()
+@click.pass_context
+def search(ctx: click.Context):
+    """
+        Open the web interface to search for artifacts
+    """
+
+    with handle_common_errors():
+        repos = RepoGroup(remote_uri=ctx.obj['server'])
+        query = ArtifactQuery('', {})
+
+        if query.is_exact:
+            artifacts = [repos.lookup_single(query)]
+        else:
+            repos.download_metadata_for_type(query.type)
+            artifacts = list(LOCAL_REPO.lookup(query))
+
+        index_webpage_template = Path(__file__).parent / 'index_ui.min.html'
+        fd, filename = tempfile.mkstemp('.html', text=True)
+        with open(fd, 'w') as f:
+            f.write(_index_web_format_artifact_metadata(artifacts, index_webpage_template.read_text(), ''))
+
+        subprocess.call(['xdg-open', filename])
 
 
 def main():
