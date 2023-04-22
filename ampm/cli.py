@@ -17,6 +17,7 @@ from ampm.repo.base import ArtifactQuery, AmbiguousQueryError, RepoGroup, QueryN
     ArtifactMetadata, ArtifactRepo, REMOTE_REPO_URI, AmbiguousComparisonError, NiceTrySagi
 from ampm.repo.local import LOCAL_REPO
 from ampm import __version__
+from ampm.repo.nfs import NfsRepo
 from ampm.utils import _calc_dir_size, randbytes, hash_local_file, remove_atexit
 
 
@@ -401,10 +402,20 @@ def upload(
 
 
 @cli.command()
-@click.option('--remote', is_flag=True, default=False, help='Garbage collect on remote storage instead')
+@click.argument('artifact', type=str)
+@click.option(
+    '--i-realise-this-may-break-other-peoples-builds-in-the-future',
+    is_flag=True,
+    default=False,
+    help='Make sure nobody will ever use this artifact ever again!!!',
+)
 @click.pass_context
-def gc(ctx: click.Context, remote: bool):
-    raise NotImplementedError()
+def remote_rm(ctx: click.Context, artifact: str, i_realise_this_may_break_other_peoples_builds_in_the_future: bool):
+    if not i_realise_this_may_break_other_peoples_builds_in_the_future:
+        raise click.BadParameter('You must specify --i-realise-this-may-break-other-peoples-builds-in-the-future')
+
+    remote_repo: NfsRepo = ArtifactRepo.by_uri(ctx.obj['server'])
+    remote_repo.remove_artifact(artifact)
 
 
 def main():

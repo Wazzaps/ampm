@@ -28,6 +28,9 @@ class LocalRepo(ArtifactRepo):
         for metadata_path in self.metadata_path_of(artifact_type, None, '').glob('**/*.toml'):
             yield ArtifactMetadata.from_dict(toml.load(metadata_path))
 
+    def lockfile_for_artifact(self, metadata: ArtifactMetadata) -> LockFile:
+        return LockFile(self.artifact_base_path_of(metadata, '.lock'), f'artifact {metadata.type}:{metadata.hash}',)
+
     def lookup(self, query: ArtifactQuery) -> Iterable[ArtifactMetadata]:
         if query.is_exact:
             try:

@@ -6,7 +6,6 @@ import sys
 import re
 import shutil
 import threading
-import time
 from math import ceil
 from pathlib import Path
 from typing import List, Iterable, ContextManager, Optional
@@ -23,6 +22,13 @@ from ampm.utils import _calc_dir_size, remove_atexit, LockFile
 
 DEFAULT_CHUNK_SIZE = 1024 * 256
 NFS_OP_TIMEOUT_SEC = 16
+
+
+def _common_prefix(iter1, iter2):
+    for (a, b) in zip(iter1, iter2):
+        if a != b:
+            break
+        yield a
 
 
 def _validate_path(remote_path: str):
@@ -150,6 +156,21 @@ class NfsConnection:
 
         return fh, attrs
 
+    def _remove(self, remote_path: List[str]):
+        fh = self._open(remote_path[:-1])[0]
+        remove_res = self.nfs3.remove(fh, remote_path[-1])
+        if remove_res["status"] != NFS3_OK:
+            raise IOError(f"NFS remove failed: code={remove_res['status']} ({NFSSTAT3[remove_res['status']]})")
+
+    def remove(self, remote_path: str):
+        _validate_path(remote_path)
+        self._remove(self._splitpath(remote_path))
+
+    def rmtree(self, remote_path: str):
+        for path in self.walk_files_dirs_at_end(remote_path):
+            print('Removing:', path, file=sys.stderr)
+            self.remove(path)
+
     def _mkdir_recursive(self, remote_path: List[str]):
         dir_fh = self.root_fh
         for path_part in remote_path:
@@ -200,20 +221,45 @@ class NfsConnection:
         else:
             raise IOError(f"NFS readdir failed: code={readdir_res['status']} ({NFSSTAT3[readdir_res['status']]})")
 
-    def walk_files(self, remote_path: str):
+    def walk_files(self, remote_path: str, include_dirs: bool = False):
         _validate_path(remote_path)
         fh, _attrs = self._open(self._splitpath(remote_path))
         readdir_res = self.nfs3.readdir(fh)
         if readdir_res["status"] == NFS3_OK:
+            if include_dirs:
+                yield remote_path
             entry = readdir_res["resok"]["reply"]["entries"]
             while entry:
                 if not entry[0]['name'].startswith(b'.'):
-                    yield from self.walk_files(remote_path + '/' + entry[0]['name'].decode())
+                    yield from self.walk_files(remote_path + '/' + entry[0]['name'].decode(), include_dirs)
                 entry = entry[0]['nextentry']
         elif readdir_res["status"] == NFS3ERR_NOTDIR:
             yield remote_path
         else:
             raise IOError(f"NFS readdir failed: code={readdir_res['status']} ({NFSSTAT3[readdir_res['status']]})")
+
+    def walk_files_dirs_at_end(self, remote_path: str):
+        """Transform the output of `walk_files` such that the dirs appear after their contents"""
+        last = ''
+
+        for path in self.walk_files(remote_path, include_dirs=True):
+            if not path.startswith(last + '/') and last:
+                current_parts = path.split('/')
+                last_parts = last.split('/')
+                common_parts = list(_common_prefix(current_parts, last_parts))
+                for subdir in [last_parts[:i] for i in range(len(last_parts), len(common_parts), -1)]:
+                    yield '/'.join(subdir)
+            last = path
+
+        if not last:
+            # Empty directory
+            return
+
+        base_parts = remote_path.split('/')[:-1]
+        last_parts = last.split('/')
+        common_parts = list(_common_prefix(base_parts, last_parts))
+        for subdir in [last_parts[:i] for i in range(len(last_parts), len(common_parts), -1)]:
+            yield '/'.join(subdir)
 
     def rename(self, old_path: str, new_path: str):
         _validate_path(old_path)
@@ -494,19 +540,12 @@ class NfsRepo(ArtifactRepo):
 
     def download(self, metadata: ArtifactMetadata) -> Path:
         tmp_local_base_path = LOCAL_REPO.artifact_base_path_of(metadata, '.tmp')
-        lockfile = LockFile(
-            LOCAL_REPO.artifact_base_path_of(metadata, '.lock'),
-            f'artifact {metadata.type}:{metadata.hash}',
-        )
         tmp_local_path = LOCAL_REPO.artifact_path_of(metadata, '.tmp')
         local_base_path = LOCAL_REPO.artifact_base_path_of(metadata)
         remote_path = self.artifact_path_of(metadata)
         remote_base_path = self.artifact_base_path_of(metadata)
 
         tmp_local_base_path.parent.mkdir(parents=True, exist_ok=True)
-        lockfile.take()
-        remove_atexit(lockfile.path)
-
         # In case a concurrent ampm already downloaded this
         if local_base_path.exists():
             return LOCAL_REPO.artifact_path_of(metadata)
@@ -516,17 +555,8 @@ class NfsRepo(ArtifactRepo):
 
         actual_hash = None
 
-        is_done = False
-
-        def lockfile_updater():
-            while not is_done:
-                lockfile.refresh()
-                time.sleep(1)
-
         with self.nfs.connected():
             tmp_local_base_path.mkdir(parents=True, exist_ok=True)
-            lockfile_updater_thread = threading.Thread(target=lockfile_updater)
-            lockfile_updater_thread.start()
 
             if metadata.path_type == 'file' or metadata.path_type == 'dir':
                 if metadata.path_location:
@@ -579,12 +609,7 @@ class NfsRepo(ArtifactRepo):
 
                 actual_hash = hasher.hexdigest()
             else:
-                is_done = True
-                lockfile_updater_thread.join()
                 raise ValueError(f'Unknown artifact type: {metadata.path_type}')
-
-            is_done = True
-            lockfile_updater_thread.join()
 
         if metadata.path_hash and actual_hash and metadata.path_hash != actual_hash:
             raise ArtifactCorruptedError(f'Hash mismatch for {metadata.type}:{metadata.hash}: '
@@ -598,20 +623,21 @@ class NfsRepo(ArtifactRepo):
         base_path = self.metadata_path_of(artifact_type, '', '')
         try:
             with self.nfs.connected():
-                for metadata_path in self.nfs.walk_files(base_path):
-                    matches = re.match(r'(.*)/([a-z0-9]{32})\.toml$', metadata_path[len(base_path):])
-                    if matches:
-                        type_extra = matches.group(1)
-                        artifact_hash = matches.group(2)
-                        local_path = LOCAL_REPO.metadata_path_of(artifact_type + type_extra, artifact_hash, '.toml')
-                        tmp_local_path = LOCAL_REPO.metadata_path_of(
-                            artifact_type + type_extra,
-                            artifact_hash,
-                            '.toml.tmp',
-                        )
-                        tmp_local_path.parent.mkdir(parents=True, exist_ok=True)
-                        self.nfs.download(tmp_local_path, self.metadata_path_of(artifact_type + type_extra, artifact_hash))
-                        tmp_local_path.rename(local_path)
+                with LOCAL_REPO.metadata_lockfile:
+                    for metadata_path in self.nfs.walk_files(base_path):
+                        matches = re.match(r'(.*)/([a-z0-9]{32})\.toml$', metadata_path[len(base_path):])
+                        if matches:
+                            type_extra = matches.group(1)
+                            artifact_hash = matches.group(2)
+                            local_path = LOCAL_REPO.metadata_path_of(artifact_type + type_extra, artifact_hash, '.toml')
+                            tmp_local_path = LOCAL_REPO.metadata_path_of(
+                                artifact_type + type_extra,
+                                artifact_hash,
+                                '.toml.tmp',
+                            )
+                            tmp_local_path.parent.mkdir(parents=True, exist_ok=True)
+                            self.nfs.download(tmp_local_path, self.metadata_path_of(artifact_type + type_extra, artifact_hash))
+                            tmp_local_path.rename(local_path)
         except (ConnectionError, PermissionError):
             raise
         except IOError:
@@ -645,3 +671,22 @@ class NfsRepo(ArtifactRepo):
         else:
             return f'{self.repo_path}/artifacts/{metadata.type.lower()}/{metadata.hash.lower()}{suffix}/' \
                    f'{metadata.name}{metadata.path_suffix}'
+
+    def remove_artifact(self, identifier: str):
+        try:
+            metadata = next(self.lookup(ArtifactQuery(identifier, {})))
+        except QueryNotFoundError:
+            print(f'Artifact {identifier} not found', file=sys.stderr)
+            return False
+
+        metadata_path = self.metadata_path_of(metadata.type, metadata.hash)
+
+        self.nfs.rmtree(metadata_path)
+
+        if metadata.path_location:
+            print(f'Artifact has custom path, not removing {metadata.path_location}', file=sys.stderr)
+        else:
+            artifact_path = self.artifact_base_path_of(metadata)
+            self.nfs.rmtree(artifact_path)
+
+        return True

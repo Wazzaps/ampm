@@ -217,13 +217,15 @@ class RepoGroup:
         return results[0]
 
     def get_single(self, query: ArtifactQuery) -> Tuple[Path, ArtifactMetadata]:
+        from ampm.repo.local import LOCAL_REPO
         metadata = self.lookup_single(query)
 
-        for repo in self.repos:
-            try:
-                return repo.download(metadata), metadata
-            except QueryNotFoundError:
-                continue
+        with LOCAL_REPO.lockfile_for_artifact(metadata):
+            for repo in self.repos:
+                try:
+                    return repo.download(metadata), metadata
+                except QueryNotFoundError:
+                    continue
 
         raise QueryNotFoundError(query)
 

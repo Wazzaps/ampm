@@ -25,7 +25,7 @@ jobs:
   test-linux:
     name: Test linux binaries
     runs-on: ubuntu-20.04
-    timeout-minutes: 20
+    timeout-minutes: 10
     container: python:3
     steps:
       - name: Checkout code

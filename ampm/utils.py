@@ -1,3 +1,5 @@
+import random
+import threading
 import atexit
 import hashlib
 import os
@@ -51,7 +53,9 @@ def randbytes(length: int) -> bytes:
 
 
 def remove_atexit(path: Path):
-    atexit.register(lambda f: f.unlink(missing_ok=True), path)
+    def handler():
+        path.unlink(missing_ok=True)
+    atexit.register(handler)
 
 
 class LockFile:
@@ -60,8 +64,11 @@ class LockFile:
         self.description = description
         self.lockfile: Optional[TextIOWrapper] = None
 
+        self._updater_thread_stop = threading.Event()
+        self._updater_thread = None
+
     def take(self):
-        waited_for = 0
+        waited_for = 0.0
         while True:
             try:
                 self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -69,19 +76,26 @@ class LockFile:
                 self.refresh()
                 break
             except FileExistsError:
-                last_locktime = 0
+                strikes = 0
+                last_locktime = ''
                 while True:
                     try:
-                        new_locktime = float(self.path.read_text() or '0')
+                        new_locktime = self.path.read_text() or '0'
                         if new_locktime != last_locktime:
                             last_locktime = new_locktime
-                            print(f'INFO: [{waited_for}s] Waiting for lockfile on {self.description}', file=sys.stderr)
-                            time.sleep(2)
-                            waited_for += 2
+                            strikes = 0
                         else:
-                            print(f'INFO: ampm that locked the download of {self.description} seems to be dead, force unlocking', file=sys.stderr)
-                            self.path.unlink(missing_ok=True)
-                            break
+                            strikes += 1
+                            # After about 10 seconds, we assume the process that locked the file died abruptly
+                            if strikes > 20:
+                                print(f'INFO: ampm that locked the download of {self.description} seems to be dead, force unlocking', file=sys.stderr)
+                                self.path.unlink(missing_ok=True)
+                                break
+
+                        print(f'INFO: [{waited_for:0.1f}s] Waiting for lockfile on {self.description}', file=sys.stderr)
+                        wait_for = 0.5 + random.random() / 4
+                        time.sleep(wait_for)
+                        waited_for += wait_for
                     except FileNotFoundError:
                         break  # lockfile was deleted, we can take it
 
@@ -92,10 +106,29 @@ class LockFile:
         self.lockfile.write(f'{time.time():0.2f}')
         self.lockfile.flush()
 
-    def __enter__(self):
+    def take_and_spawn_refresher(self):
         self.take()
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+        def lockfile_updater():
+            while True:
+                self.refresh()
+                if self._updater_thread_stop.wait(1):
+                    break
+
+        self._updater_thread_stop.clear()
+        self._updater_thread = threading.Thread(target=lockfile_updater, daemon=True)
+        self._updater_thread.start()
+
+    def release_and_kill_refresher(self):
+        self._updater_thread_stop.set()
+        self._updater_thread.join()
+
         self.lockfile.close()
         self.lockfile = None
         self.path.unlink()
+
+    def __enter__(self):
+        self.take_and_spawn_refresher()
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.release_and_kill_refresher()

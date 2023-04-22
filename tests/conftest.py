@@ -32,9 +32,16 @@ def local_repo_path() -> Path:
 
 
 @pytest.fixture()
-def clean_repos(local_repo_path, nfs_repo_path):
-    shutil.rmtree(local_repo_path / 'metadata', ignore_errors=True)
-    shutil.rmtree(local_repo_path / 'artifacts', ignore_errors=True)
+def clean_repos(clean_repos_now):
+    clean_repos_now()
+
+
+@pytest.fixture()
+def clean_repos_now(local_repo_path, nfs_repo_path):
+    def _clean_repos_now():
+        shutil.rmtree(local_repo_path / 'metadata', ignore_errors=True)
+        shutil.rmtree(local_repo_path / 'artifacts', ignore_errors=True)
+    return _clean_repos_now
 
 
 @pytest.fixture(scope='session')
@@ -90,4 +97,3 @@ def nfs_repo(nfs_server) -> NfsRepo:
     nfs_root = nfs_server["root"] / random_id
     nfs_root.mkdir()
     return NfsRepo.from_uri_part(f'{nfs_server["host"]}{nfs_root}#repo')
-

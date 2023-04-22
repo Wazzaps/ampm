@@ -83,6 +83,21 @@ def list_(nfs_repo_uri):
     return _list_
 
 
+@pytest.fixture()
+def remote_rm(nfs_repo_uri):
+    def _remote_rm(identifier: str, accept: bool) -> Path:
+        runner = CliRunner(mix_stderr=False, env={'AMPM_SERVER': nfs_repo_uri})
+        result = runner.invoke(
+            ampm.cli.cli,
+            ['remote-rm', identifier]
+            + (['--i-realise-this-may-break-other-peoples-builds-in-the-future'] if accept else []),
+            catch_exceptions=False
+        )
+        formatted_output = f'== STDERR ==\n{result.stderr}\n\n== STDOUT ==\n{result.stdout}'
+        assert result.exit_code == 0, formatted_output
+    return _remote_rm
+
+
 @pytest.mark.parametrize('is_compressed', ['compressed', 'uncompressed'])
 def test_upload_single_file(nfs_repo_path, clean_repos, upload, is_compressed):
     _ = clean_repos
@@ -577,3 +592,83 @@ def test_offline(clean_repos, upload, list_):
 
     offline_list = list_('foo', {}, offline=True, override_server='SHOULDNT_BE_USED')
     assert online_list == offline_list, 'Offline listing was different than cached listing'
+
+
+@pytest.mark.parametrize('is_compressed', ['compressed', 'uncompressed'])
+def test_remote_rm_file(clean_repos_now, upload, list_, remote_rm, nfs_repo_path: Path, is_compressed):
+    clean_repos_now()
+
+    artifact_hash = upload(
+        'tests/dummy_data/foobar.txt',
+        artifact_type='foo',
+        compressed=is_compressed,
+    )
+
+    assert len(list_('foo', {})) != 0, 'Uploaded artifact not found'
+
+    remote_rm(f'foo:{artifact_hash}', accept=True)
+    clean_repos_now()
+
+    assert len(list_('foo', {})) == 0, 'Uploaded artifact not removed'
+
+    assert not (nfs_repo_path / 'metadata' / 'foo' / f'{artifact_hash}.toml').exists(), 'Metadata file not removed'
+    assert not (nfs_repo_path / 'artifacts' / 'foo' / f'{artifact_hash}').exists(), 'Artifact file not removed'
+
+
+@pytest.mark.parametrize('is_compressed', ['compressed', 'uncompressed'])
+def test_remote_rm_dir(clean_repos_now, upload, list_, remote_rm, nfs_repo_path: Path, is_compressed):
+    clean_repos_now()
+
+    artifact_hash = upload(
+        'tests/dummy_data/foo_dir',
+        artifact_type='foo',
+        compressed=is_compressed,
+    )
+
+    assert len(list_('foo', {})) != 0, 'Uploaded artifact not found'
+
+    remote_rm(f'foo:{artifact_hash}', accept=True)
+    clean_repos_now()
+
+    assert len(list_('foo', {})) == 0, 'Uploaded artifact not removed'
+
+    assert not (nfs_repo_path / 'metadata' / 'foo' / f'{artifact_hash}.toml').exists(), 'Metadata file not removed'
+    assert not (nfs_repo_path / 'artifacts' / 'foo' / f'{artifact_hash}').exists(), 'Artifact file not removed'
+
+
+@pytest.mark.parametrize('is_compressed', ['compressed', 'uncompressed'])
+def test_remote_rm_location(clean_repos_now, upload, list_, remote_rm, nfs_mount_path: Path, nfs_repo_path: Path, is_compressed):
+    clean_repos_now()
+
+    remote_path = nfs_mount_path / 'custom_dir' / ('foobar.txt' + ('.gz' if is_compressed == 'compressed' else ''))
+    artifact_hash = upload(
+        'tests/dummy_data/foo_dir',
+        artifact_type='foo',
+        remote_path=str(remote_path),
+        compressed=is_compressed,
+    )
+
+    assert len(list_('foo', {})) != 0, 'Uploaded artifact not found'
+
+    remote_rm(f'foo:{artifact_hash}', accept=True)
+    clean_repos_now()
+
+    assert len(list_('foo', {})) == 0, 'Uploaded artifact not removed'
+
+    assert not (nfs_repo_path / 'metadata' / 'foo' / f'{artifact_hash}.toml').exists(), 'Metadata file not removed'
+    assert remote_path.exists(), 'Artifact file removed'
+
+
+def test_remote_rm_required_arg(clean_repos, upload, list_, remote_rm):
+    _ = clean_repos
+
+    artifact_hash = upload(
+        'tests/dummy_data/foobar.txt',
+        artifact_type='foo',
+        compressed=False,
+    )
+
+    assert len(list_('foo', {})) != 0, 'Uploaded artifact not found'
+
+    with pytest.raises(AssertionError):
+        remote_rm(f'foo:{artifact_hash}', accept=False)
