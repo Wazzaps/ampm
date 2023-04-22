@@ -390,26 +390,42 @@ def test_attr_filters(clean_repos, upload, list_, filter_type):
         'num': ['1', '2', '3', '4', '5'],
         'date': ['2020-01-01', '2020-01-02', '2020-01-03', '2020-01-04', '2020-01-05'],
         'semver': ['1.0.0', '1.0.1', '1.0.1-alpha', '1.1.0', '1.2.0', '1.3.0-alpha', '2.0.0'],
+        'glob': ['abcdef', 'abc123'],
+        'regex': ['abcdef', 'abc123'],
     }
 
     sample_queries = {
         'num': {
-            '@num:biggest': '5',
-            '@num:smallest': '1',
+            '@num:biggest': ['5'],
+            '@num:smallest': ['1'],
         },
         'date': {
-            '@date:latest': '2020-01-05',
-            '@date:earliest': '2020-01-01',
+            '@date:latest': ['2020-01-05'],
+            '@date:earliest': ['2020-01-01'],
         },
         'semver': {
-            '@semver:newest': '2.0.0',
-            '@semver:oldest': '1.0.0',
-            '@semver:^1.0.0': '1.2.0',
-            '@semver:~1.0.0': '1.0.1',
-            '@semver:^1.2.0,prerelease': '1.3.0-alpha',
-            '@semver:<1.0.1,prerelease': '1.0.1-alpha',
-            '@semver:^2.0.0': '2.0.0',
-            '@semver:>1.0.0': '2.0.0',
+            '@semver:newest': ['2.0.0'],
+            '@semver:oldest': ['1.0.0'],
+            '@semver:^1.0.0': ['1.2.0'],
+            '@semver:~1.0.0': ['1.0.1'],
+            '@semver:^1.2.0,prerelease': ['1.3.0-alpha'],
+            '@semver:<1.0.1,prerelease': ['1.0.1-alpha'],
+            '@semver:^2.0.0': ['2.0.0'],
+            '@semver:>1.0.0': ['2.0.0'],
+        },
+        'glob': {
+            '@glob:abc*': ['abcdef', 'abc123'],
+            '@glob:abc[1d][2e][3f]': ['abcdef', 'abc123'],
+            '@glob:abc?ef': ['abcdef'],
+            '@glob:*bc12*': ['abc123'],
+            '@glob:bc*': [],
+        },
+        'regex': {
+            '@regex:abc.*': ['abcdef', 'abc123'],
+            '@regex:abc[1d][2e][3f]': ['abcdef', 'abc123'],
+            '@regex:abc.ef': ['abcdef'],
+            '@regex:.*bc12.*': ['abc123'],
+            '@regex:bc.*': [],
         },
     }
 
@@ -433,7 +449,7 @@ def test_attr_filters(clean_repos, upload, list_, filter_type):
 
     for query, expected in sample_queries[filter_type].items():
         artifacts = do_test(query)
-        assert artifacts == [expected], f"Wrong artifacts for {query}"
+        assert artifacts == expected, f"Wrong artifacts for {query}"
 
 
 def test_attr_filters_ambiguous(clean_repos, upload, list_):

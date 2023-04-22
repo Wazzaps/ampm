@@ -1,4 +1,6 @@
 import datetime
+import fnmatch
+import re
 import semver
 
 
@@ -120,8 +122,38 @@ class SemverComparator(Comparator):
                "Only accepts semver versions, e.g. v1.2.3 or 1.2.3 or 1.2.3-alpha or 1.2.3-alpha+somestring"
 
 
+class GlobComparator(Comparator):
+    @staticmethod
+    def filter(param: str, a: str) -> bool:
+        return fnmatch.fnmatch(a, param)
+
+    @staticmethod
+    def compare(param, a: str, b: str) -> int:
+        return 0
+
+    @staticmethod
+    def help():
+        return "Filters by glob, e.g. @glob:x86* or @glob:mips??32 or @glob:armv[67]*"
+
+
+class RegexComparator(Comparator):
+    @staticmethod
+    def filter(param: str, a: str) -> bool:
+        return re.match(param, a) is not None
+
+    @staticmethod
+    def compare(param, a: str, b: str) -> int:
+        return 0
+
+    @staticmethod
+    def help():
+        return "Filters by regex, e.g. @regex:i386|x86_64 or @regex:^v1.[01234]$"
+
+
 COMPARATORS = {
     '@num': NumberComparator,
     '@date': DateComparator,
     '@semver': SemverComparator,
+    '@glob': GlobComparator,
+    '@regex': RegexComparator,
 }

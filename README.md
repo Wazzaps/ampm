@@ -62,6 +62,12 @@ ampm get foobar -a arch=x86_64 -a major_ver=@num:biggest -a @any=@ignore
 # Gets latest release that's newer-or-equal to 1.0.0 but older than 2.0.0 (not including prereleases)
 ampm get foobar -a arch=x86_64 -a version='@semver:^1.0.0'
 
+# Gets any release that matches a regex on the `arch` attribute
+ampm get foobar -a arch='@regex:x86_64|i386' -a @any=@ignore
+
+# Gets any release that matches a glob on the `arch` attribute
+ampm get foobar -a arch='@glob:arm*' -a @any=@ignore
+
 # List all artifacts with type
 ampm list foobar
 
