@@ -98,6 +98,22 @@ def remote_rm(nfs_repo_uri):
     return _remote_rm
 
 
+@pytest.fixture()
+def edit(nfs_repo_uri):
+    def _edit(identifier: str, attributes=None) -> Path:
+        if attributes is None:
+            attributes = {}
+        runner = CliRunner(mix_stderr=False, env={'AMPM_SERVER': nfs_repo_uri})
+        result = runner.invoke(
+            ampm.cli.cli,
+            ['edit', identifier] + [f'--attr={k}={v}' for k, v in attributes.items()],
+            catch_exceptions=False
+        )
+        formatted_output = f'== STDERR ==\n{result.stderr}\n\n== STDOUT ==\n{result.stdout}'
+        assert result.exit_code == 0, formatted_output
+    return _edit
+
+
 @pytest.mark.parametrize('is_compressed', ['compressed', 'uncompressed'])
 def test_upload_single_file(nfs_repo_path, clean_repos, upload, is_compressed):
     _ = clean_repos
@@ -688,3 +704,76 @@ def test_remote_rm_required_arg(clean_repos, upload, list_, remote_rm):
 
     with pytest.raises(AssertionError):
         remote_rm(f'foo:{artifact_hash}', accept=False)
+
+
+def test_edit_simple(clean_repos, upload, list_, edit):
+    _ = clean_repos
+
+    artifact_hash = upload(
+        'tests/dummy_data/foobar.txt',
+        artifact_type='foo',
+        compressed=False,
+    )
+
+    before = list_('foo', {})[0]
+    edit(f'foo:{artifact_hash}', {'abc': 'def'})
+    after = list_('foo', {})[0]
+    assert before != after, 'Edit didn\'t change anything'
+    assert before['attributes'] == after['attributes'], 'Edit changed static attributes'
+    assert before['mutable'] != after['mutable'], 'Edit didn\'t change mutable block'
+    assert after['mutable']['attributes']['abc'] == 'def', 'Edit didn\'t add attribute'
+    assert list(after['mutable']['attributes'].keys()) == ['abc'], 'Edit added spurious attributes'
+
+
+def test_edit_multiple(clean_repos, upload, list_, edit):
+    _ = clean_repos
+
+    artifact_hash = upload(
+        'tests/dummy_data/foobar.txt',
+        artifact_type='foo',
+        compressed=False,
+    )
+
+    before = list_('foo', {})[0]
+
+    def do_tests(after, expected_mut_attrs: Dict[str, str]):
+        assert before != after, 'Edit didn\'t change anything'
+        assert before['attributes'] == after['attributes'], 'Edit changed static attributes'
+        assert before['mutable'] != after['mutable'], 'Edit didn\'t change mutable block'
+        for k, v in expected_mut_attrs.items():
+            assert after['mutable']['attributes'][k] == v, f'Edit didn\'t add attribute {k}'
+        assert list(after['mutable']['attributes'].keys()) == list(expected_mut_attrs.keys()), \
+            f'Edit added spurious attributes: {list(after["mutable"]["attributes"].keys())}'
+
+    edit(f'foo:{artifact_hash}', {'a': 'b'})
+    after_add1 = list_('foo', {})[0]
+    do_tests(after_add1, {'a': 'b'})
+
+    edit(f'foo:{artifact_hash}', {'c': 'd'})
+    after_add2 = list_('foo', {})[0]
+    do_tests(after_add2, {'a': 'b', 'c': 'd'})
+
+    edit(f'foo:{artifact_hash}', {'-a': ''})
+    after_remove1 = list_('foo', {})[0]
+    do_tests(after_remove1, {'c': 'd'})
+
+    edit(f'foo:{artifact_hash}', {'-c': ''})
+    after_remove2 = list_('foo', {})[0]
+    do_tests(after_remove2, {})
+
+
+def test_edit_try_override_static_attr(clean_repos, upload, list_, edit):
+    _ = clean_repos
+
+    artifact_hash = upload(
+        'tests/dummy_data/foobar.txt',
+        artifact_type='foo',
+        compressed=False,
+        attributes={'abc': 'def'},
+    )
+
+    before = list_('foo', {})[0]
+    with pytest.raises(AssertionError):
+        edit(f'foo:{artifact_hash}', {'abc': 'aaa'})
+    after = list_('foo', {})[0]
+    assert before == after, 'Edit changed something'

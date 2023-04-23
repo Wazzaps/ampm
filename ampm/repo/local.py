@@ -191,9 +191,11 @@ class LocalRepo(ArtifactRepo):
 
     def format_env_file(self, metadata: ArtifactMetadata) -> str:
         base_dir = self.artifact_path_of(metadata)
+        env = metadata.mutable.get('env', {})
+        env.update(metadata.env)
         return '\n'.join(
             f'export {shlex.quote(k)}={shlex.quote(v.replace("${BASE_DIR}", str(base_dir)))}'
-            for k, v in metadata.env.items()
+            for k, v in env.items()
         ) + '\n'
 
 

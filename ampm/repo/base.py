@@ -33,8 +33,9 @@ class ArtifactMetadata:
     path_type: str
     path_hash: Optional[str]
     path_location: Optional[str]
+    mutable: Dict[str, any]
 
-    def to_dict(self) -> Dict:
+    def to_dict(self, with_mutable: bool) -> Dict:
         result = {
             "artifact": {
                 "name": self.name,
@@ -52,6 +53,8 @@ class ArtifactMetadata:
             result["path"]["location"] = self.path_location
         if self.path_hash:
             result["path"]["hash"] = self.path_hash
+        if with_mutable:
+            result["mutable"] = self.mutable
         return result
 
     @staticmethod
@@ -68,11 +71,12 @@ class ArtifactMetadata:
             path_type=data["path"]["type"],
             path_location=data["path"].get("location", None),
             path_hash=data["path"].get("hash", None),
+            mutable=data.get("mutable", {}),
         )
 
     @cached_property
     def hash(self):
-        return hash_buffer(toml.dumps(self.to_dict()).encode("utf-8")).lower()
+        return hash_buffer(toml.dumps(self.to_dict(with_mutable=False)).encode("utf-8")).lower()
 
     @property
     def path_suffix(self):
@@ -94,6 +98,7 @@ class ArtifactMetadata:
             'description': self.description,
             'pubdate': self.pubdate.astimezone().isoformat(sep=' '),
         }
+        combined_attrs.update(self.mutable.get('attributes', {}))
         if self.path_location:
             combined_attrs['location'] = self.path_location
         combined_attrs.update(self.attributes)

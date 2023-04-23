@@ -8,7 +8,7 @@ import shutil
 import threading
 from math import ceil
 from pathlib import Path
-from typing import List, Iterable, ContextManager, Optional
+from typing import List, Iterable, ContextManager, Optional, Dict
 
 import toml
 import tqdm
@@ -512,7 +512,7 @@ class NfsRepo(ArtifactRepo):
             print('Uploading metadata...', file=sys.stderr)
             tmp_remote_metadata_path = self.metadata_path_of(metadata.type, metadata.hash, '.toml.tmp')
             remote_metadata_path = self.metadata_path_of(metadata.type, metadata.hash)
-            self.nfs.write(toml.dumps(metadata.to_dict()).encode('utf-8'), tmp_remote_metadata_path)
+            self.nfs.write(toml.dumps(metadata.to_dict(with_mutable=True)).encode('utf-8'), tmp_remote_metadata_path)
             self.nfs.rename(tmp_remote_metadata_path, remote_metadata_path)
 
             print('Done!', file=sys.stderr)
@@ -690,3 +690,68 @@ class NfsRepo(ArtifactRepo):
             self.nfs.rmtree(artifact_path)
 
         return True
+
+    def edit_artifact(self, identifier: str, attr: Dict[str, str], env: Dict[str, str]):
+        try:
+            metadata: ArtifactMetadata = next(self.lookup(ArtifactQuery(identifier, {})))
+        except QueryNotFoundError:
+            print(f'Artifact {identifier} not found', file=sys.stderr)
+            return False
+
+        # Apply changes to mutable attrs
+        mut_attrs = metadata.mutable.setdefault('attributes', {})
+        attrs_to_change = {k: v for k, v in attr.items() if not k.startswith('-')}
+        attrs_to_remove = [k[1:] for k, _ in attr.items() if k.startswith('-')]
+
+        mut_attrs.update(attrs_to_change)
+        for k in attrs_to_remove:
+            mut_attrs.pop(k)
+
+        changed_static_attrs = set(mut_attrs.keys()).intersection(set(metadata.attributes.keys()))
+        if len(changed_static_attrs) > 0:
+            print(
+                'ERROR: The following attributes were specified during upload and cannot be changed:',
+                ', '.join(changed_static_attrs),
+                file=sys.stderr,
+            )
+            exit(1)
+
+        # Apply changes to mutable env vars
+        mut_env = metadata.mutable.setdefault('env', {})
+        env_to_change = {k: v for k, v in env.items() if not k.startswith('-')}
+        env_to_remove = [k[1:] for k, _ in env.items() if k.startswith('-')]
+
+        mut_env.update(env_to_change)
+        for k in env_to_remove:
+            mut_env.pop(k)
+
+        changed_static_env = set(mut_env.keys()).intersection(set(metadata.env.keys()))
+        if len(changed_static_env) > 0:
+            print(
+                'ERROR: The following environment vars were specified during upload and cannot be changed:',
+                ', '.join(changed_static_env),
+                file=sys.stderr,
+            )
+            exit(1)
+
+        with self.nfs.connected():
+            print('Uploading metadata...', file=sys.stderr)
+            tmp_remote_metadata_path = self.metadata_path_of(metadata.type, metadata.hash, '.toml.tmp')
+            remote_metadata_bak_path = self.metadata_path_of(metadata.type, metadata.hash, '.toml.bak')
+            remote_metadata_path = self.metadata_path_of(metadata.type, metadata.hash)
+
+            try:
+                self.nfs.remove(remote_metadata_bak_path)
+            except IOError:
+                pass  # No backup, moving on
+
+            try:
+                self.nfs.remove(tmp_remote_metadata_path)
+            except IOError:
+                pass  # No temp fille, moving on
+
+            self.nfs.write(toml.dumps(metadata.to_dict(with_mutable=True)).encode('utf-8'), tmp_remote_metadata_path)
+            self.nfs.rename(remote_metadata_path, remote_metadata_bak_path)
+            self.nfs.rename(tmp_remote_metadata_path, remote_metadata_path)
+
+            print('Done!', file=sys.stderr)

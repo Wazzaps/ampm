@@ -277,7 +277,7 @@ def list_(
         if output_format == 'pretty':
             print('\n\n'.join(_format_artifact_metadata(artifact_metadata) for artifact_metadata in artifacts))
         elif output_format == 'json':
-            print(json.dumps([artifact_metadata.to_dict() for artifact_metadata in artifacts], indent=4))
+            print(json.dumps([artifact_metadata.to_dict(with_mutable=True) for artifact_metadata in artifacts], indent=4))
         elif output_format == 'short':
             print('\n'.join(_short_format_artifact_metadata(artifact_metadata) for artifact_metadata in artifacts))
         elif output_format == 'index-file':
@@ -457,6 +457,7 @@ def upload(
         path_type=artifact_type,
         path_hash=artifact_hash,
         path_location=remote_path,
+        mutable={},
     )
 
     remote_repo.upload(meta, local_path)
@@ -507,6 +508,22 @@ def search(ctx: click.Context):
             f.write(_index_web_format_artifact_metadata(artifacts, index_webpage_template.read_text(), ''))
 
         subprocess.call(['xdg-open', filename])
+
+
+@cli.command()
+@click.argument('artifact', type=str)
+@click.option('-a', '--attr', help='Artifact attributes', multiple=True, callback=_parse_dict)
+@click.option('-e', '--env', help='Artifact environment vars', multiple=True, callback=_parse_dict)
+@click.pass_context
+def edit(ctx: click.Context, artifact: str, attr: Dict[str, str], env: Dict[str, str]):
+    """
+        Changes attrs/env vars of an artifact
+
+        Cannot edit attributes created during initial upload
+    """
+
+    remote_repo: NfsRepo = ArtifactRepo.by_uri(ctx.obj['server'])
+    remote_repo.edit_artifact(artifact, attr, env)
 
 
 def main():
