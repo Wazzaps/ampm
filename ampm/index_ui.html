@@ -1,6 +1,10 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+    <!--
+        Before adding fancy css or js, consider that this may display 10k+ artifacts, and it must be responsive
+        and not crash the page. Have fun with the colors though, they're ugly :)
+    -->
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ampm index</title>
@@ -174,9 +178,9 @@
                 <label>Artifact Type</label>
                 <select onchange="throttledReload()">
                     <option>*</option>
-                    <option>foo</option>
-                    <option>foo/bar</option>
-                    <option>baz</option>
+                    {{foreach artifact_types}}
+                    <option>{{artifact_type}}</option>
+                    {{end foreach artifact_types}}
                 </select>
             </div>
         </div>
@@ -186,10 +190,7 @@
                 <li>
                     <div id="attr-selector">
                         <select id="attr-selector-attr">
-                            <option>a</option>
-                            <option>b</option>
-                            <option>description</option>
-                            <option>pubdate</option>
+                            <option>Loading...</option>
                         </select>
                         <select id="attr-selector-op">
                             <option>contains</option>
@@ -206,21 +207,21 @@
         </div>
     </div>
     <ul class="artifact-list">
-        {{foreach_artifact}}
-        <li data-type={{quoted_type}}>
+        {{foreach artifacts}}
+        <li data-type={{artifact_quoted_type}}>
             <div class="container">
                 <div class="title">
-                    <span><span class="ident">{{ident}}</span> &ndash; <span class="name">{{name}}</span></span>
-                    <a href={{quoted_link}}>Link</a>
+                    <span><span class="ident">{{artifact_ident}}</span> &ndash; <span class="name">{{artifact_name}}</span></span>
+                    <a href={{artifact_quoted_link}}>Link</a>
                 </div>
                 <div class="attrs">
-                    {{foreach_attr}}
+                    {{foreach artifact_attrs}}
                     <div class="attr"><span class="attr_name">{{attr_name}}</span> <span class="attr_val">{{attr_val}}</span></div>
-                    {{end_foreach_attr}}
+                    {{end foreach artifact_attrs}}
                 </div>
             </div>
         </li>
-        {{end_foreach_artifact}}
+        {{end foreach artifacts}}
     </ul>
     <h3>Built on {{build_date}}</h3>
     <script>
@@ -265,39 +266,41 @@
 
             // Filter by attributes
             const attrs = artifact.getElementsByClassName("attr");
+            let attrMap = {};
             for (const attr of attrs) {
                 const attr_name = attr.getElementsByClassName("attr_name")[0].innerText;
                 const attr_val_elem = attr.getElementsByClassName("attr_val")[0];
                 const attr_val = attr_val_elem.innerText;
-                for (const filter of attrFilters) {
-                    if (filter.attr === attr_name) {
-                        if (filter.op === "contains") {
-                            if (!attr_val.includes(filter.val)) {
-                                return false;
-                            }
-                        } else if (filter.op === "equals") {
-                            if (attr_val !== filter.val) {
-                                return false;
-                            }
-                        } else if (filter.op === "starts with") {
-                            if (!attr_val.startsWith(filter.val)) {
-                                return false;
-                            }
-                        } else if (filter.op === "ends with") {
-                            if (!attr_val.endsWith(filter.val)) {
-                                return false;
-                            }
-                        } else if (filter.op === "matches regex") {
-                            if (filter.regex === undefined) {
-                                filter.regex = new RegExp(filter.val);
-                            }
-                            if (!filter.regex.test(attr_val)) {
-                                return false;
-                            }
-                        }
+                search_criteria.push(attr_val_elem);
+                attrMap[attr_name] = attr_val;
+            }
+            for (const filter of attrFilters) {
+                const attr_val = attrMap[filter.attr] || "";
+
+                if (filter.op === "contains") {
+                    if (!attr_val.includes(filter.val)) {
+                        return false;
+                    }
+                } else if (filter.op === "equals") {
+                    if (attr_val !== filter.val) {
+                        return false;
+                    }
+                } else if (filter.op === "starts with") {
+                    if (!attr_val.startsWith(filter.val)) {
+                        return false;
+                    }
+                } else if (filter.op === "ends with") {
+                    if (!attr_val.endsWith(filter.val)) {
+                        return false;
+                    }
+                } else if (filter.op === "matches regex") {
+                    if (filter.regex === undefined) {
+                        filter.regex = new RegExp(filter.val);
+                    }
+                    if (!filter.regex.test(attr_val)) {
+                        return false;
                     }
                 }
-                search_criteria.push(attr_val_elem);
             }
 
             // Filter by free text

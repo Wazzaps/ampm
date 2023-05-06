@@ -149,33 +149,10 @@ def _index_file_format_artifact_metadata(artifact_metadata: ArtifactMetadata, pr
 
 
 def _index_web_format_artifact_metadata(artifacts: List[ArtifactMetadata], index_webpage_template: str, prefix: str) -> str:
-    preamble, _, rest = index_webpage_template.partition('{{foreach_artifact}}')
-    foreach_artifact, _, postamble = rest.partition('{{end_foreach_artifact}}')
-    artifacts = list(artifacts)
+    import ampm.webpage_template_formatter
 
-    def process_global_changes(inp, artifact_count):
-        return inp \
-            .replace('{{pretty_count}}', f'{artifact_count} Result' + ('s' if artifact_count != 1 else '')) \
-            .replace('{{build_date}}', datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-
-    def process_artifact_changes(inp, artifact_count, artifact):
-        return process_global_changes(inp, artifact_count) \
-            .replace('{{quoted_type}}', f'"{artifact.type}"') \
-            .replace('{{ident}}', f'{artifact.type}:{artifact.hash}') \
-            .replace('{{name}}', artifact.name)\
-            .replace('{{quoted_link}}', f'"{_make_link(artifact, prefix)}"')
-
-    def process_attr_changes(inp, artifact_count, artifact, k, v):
-        return process_artifact_changes(inp, artifact_count, artifact) \
-            .replace('{{attr_name}}', k) \
-            .replace('{{attr_val}}', v)
-
-    result = process_global_changes(preamble, len(artifacts))
-    for artifact in artifacts:
-        artifact_preamble, _, rest = foreach_artifact.partition('{{foreach_attr}}')
-        foreach_attr, _, artifact_postamble = rest.partition('{{end_foreach_attr}}')
-        artifact_result = process_artifact_changes(artifact_preamble, len(artifacts), artifact)
-
+    def process_attrs(artifact):
+        """Process the attributes of an artifact into a list of (key, value) pairs, in the order they should be shown"""
         attrs = artifact.combined_attrs.copy()
         # Name is shown elsewhere
         del attrs['name']
@@ -186,15 +163,30 @@ def _index_web_format_artifact_metadata(artifacts: List[ArtifactMetadata], index
         if desc:
             attrs.insert(0, ('description', desc))
         attrs.append(('pubdate', pubdate))
+        return attrs
 
-        for k, v in attrs:
-            artifact_result += process_attr_changes(foreach_attr, len(artifacts), artifact, k, v)
+    artifacts = list(artifacts)
+    rendered = ampm.webpage_template_formatter.format_page(index_webpage_template, {
+        "pretty_count": f'{len(artifacts)} Result' + ('s' if len(artifacts) != 1 else ''),
+        "build_date": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "artifact_types": [
+            {"artifact_type": artifact_type} for artifact_type in sorted(set(artifact.type for artifact in artifacts))
+        ],
+        "artifacts": [
+            {
+                "artifact_quoted_type": f'"{artifact.type}"',
+                "artifact_ident": f'{artifact.type}:{artifact.hash}',
+                "artifact_name": artifact.name,
+                "artifact_quoted_link": f'"{_make_link(artifact, prefix)}"',
+                "artifact_attrs": [
+                    {"attr_name": attr_name, "attr_val": attr_value}
+                    for attr_name, attr_value in process_attrs(artifact)
+                ],
+            } for artifact in artifacts
+        ],
+    })
 
-        artifact_result += process_artifact_changes(artifact_postamble, len(artifacts), artifact)
-        result += artifact_result
-
-    result += process_global_changes(postamble, len(artifacts))
-    return result
+    return ''.join(rendered)
 
 
 def verify_type(artifact_type: str):
