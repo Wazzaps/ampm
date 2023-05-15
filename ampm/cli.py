@@ -499,7 +499,9 @@ def search(ctx: click.Context):
         with open(fd, 'w') as f:
             f.write(_index_web_format_artifact_metadata(artifacts, index_webpage_template.read_text(), ''))
 
-        subprocess.call(['xdg-open', filename])
+        env = os.environ.copy()
+        env.pop('LD_LIBRARY_PATH', None)
+        subprocess.call(['xdg-open', filename], env=env)
 
 
 @cli.command()
