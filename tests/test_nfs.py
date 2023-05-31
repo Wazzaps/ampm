@@ -96,3 +96,27 @@ def test_path_traversal(clean_repos, nfs_repo: NfsRepo, nfs_mount_path: Path):
         # Readlink
         with pytest.raises(NiceTrySagi):
             nfs.readlink(f'{str(remote_path)}/../foo3.txt')
+
+
+def test_big_readdir(clean_repos, nfs_repo: NfsRepo, nfs_mount_path: Path):
+    _ = clean_repos
+    nfs = NfsConnection(nfs_repo.host, nfs_repo.mount_path)
+
+    with nfs.connected():
+        expected_files1 = [b'.', b'..', b'_dir']
+        expected_files2 = ['/_dir/inner']
+
+        (nfs_mount_path / '_dir').mkdir()
+        (nfs_mount_path / '_dir' / 'inner').write_text('inner')
+
+        for i in range(1024):
+            (nfs_mount_path / f'{i}.txt').write_text(f'{i}')
+            expected_files1.append(f'{i}.txt'.encode())
+            expected_files2.append(f'/{i}.txt')
+
+        expected_files1.sort()
+        expected_files2.sort()
+
+        assert list(sorted(list(nfs.list_dir('')))) == expected_files1
+
+        assert list(sorted(list(nfs.walk_files('')))) == expected_files2

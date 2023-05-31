@@ -210,33 +210,44 @@ class NfsConnection:
     def list_dir(self, remote_path: str):
         _validate_path(remote_path)
         fh, _attrs = self._open(self._splitpath(remote_path))
-        readdir_res = self.nfs3.readdir(fh)
-        if readdir_res["status"] == NFS3_OK:
-            entry = readdir_res["resok"]["reply"]["entries"]
-            while entry:
-                yield entry[0]['name']
-                entry = entry[0]['nextentry']
-        elif readdir_res["status"] == NFS3ERR_NOTDIR:
-            raise NotADirectoryError()
-        else:
-            raise IOError(f"NFS readdir failed: code={readdir_res['status']} ({NFSSTAT3[readdir_res['status']]})")
+        cookie = 0
+        while True:
+            readdir_res = self.nfs3.readdir(fh, cookie=cookie)
+            if readdir_res["status"] == NFS3_OK:
+                entry = readdir_res["resok"]["reply"]["entries"]
+                while entry:
+                    yield entry[0]['name']
+                    cookie = entry[0]['cookie']
+                    entry = entry[0]['nextentry']
+                if readdir_res["resok"]["reply"]["eof"]:
+                    break
+            elif readdir_res["status"] == NFS3ERR_NOTDIR:
+                raise NotADirectoryError()
+            else:
+                raise IOError(f"NFS readdir failed: code={readdir_res['status']} ({NFSSTAT3[readdir_res['status']]})")
 
     def walk_files(self, remote_path: str, include_dirs: bool = False):
         _validate_path(remote_path)
         fh, _attrs = self._open(self._splitpath(remote_path))
-        readdir_res = self.nfs3.readdir(fh)
-        if readdir_res["status"] == NFS3_OK:
-            if include_dirs:
+        cookie = 0
+        while True:
+            readdir_res = self.nfs3.readdir(fh, cookie=cookie)
+            if readdir_res["status"] == NFS3_OK:
+                if include_dirs:
+                    yield remote_path
+                entry = readdir_res["resok"]["reply"]["entries"]
+                while entry:
+                    if not entry[0]['name'].startswith(b'.'):
+                        yield from self.walk_files(remote_path + '/' + entry[0]['name'].decode(), include_dirs)
+                    cookie = entry[0]['cookie']
+                    entry = entry[0]['nextentry']
+                if readdir_res["resok"]["reply"]["eof"]:
+                    break
+            elif readdir_res["status"] == NFS3ERR_NOTDIR:
                 yield remote_path
-            entry = readdir_res["resok"]["reply"]["entries"]
-            while entry:
-                if not entry[0]['name'].startswith(b'.'):
-                    yield from self.walk_files(remote_path + '/' + entry[0]['name'].decode(), include_dirs)
-                entry = entry[0]['nextentry']
-        elif readdir_res["status"] == NFS3ERR_NOTDIR:
-            yield remote_path
-        else:
-            raise IOError(f"NFS readdir failed: code={readdir_res['status']} ({NFSSTAT3[readdir_res['status']]})")
+                return
+            else:
+                raise IOError(f"NFS readdir failed: code={readdir_res['status']} ({NFSSTAT3[readdir_res['status']]})")
 
     def walk_files_dirs_at_end(self, remote_path: str):
         """Transform the output of `walk_files` such that the dirs appear after their contents"""

@@ -488,6 +488,8 @@ def search(ctx: click.Context):
         repos = RepoGroup(remote_uri=ctx.obj['server'])
         query = ArtifactQuery('', {})
 
+        print("Generating index... (Hint: try `ampm --offline search` for faster generation)", file=sys.stderr)
+
         if query.is_exact:
             artifacts = [repos.lookup_single(query)]
         else:
@@ -499,9 +501,14 @@ def search(ctx: click.Context):
         with open(fd, 'w') as f:
             f.write(_index_web_format_artifact_metadata(artifacts, index_webpage_template.read_text(), ''))
 
+        print(f"Opening {filename}", file=sys.stderr)
+
         env = os.environ.copy()
         env.pop('LD_LIBRARY_PATH', None)
-        subprocess.call(['xdg-open', filename], env=env)
+        if 'BROWSER' in env:
+            subprocess.call([env['BROWSER'], filename], env=env)
+        else:
+            subprocess.call(['xdg-open', filename], env=env)
 
 
 @cli.command()
