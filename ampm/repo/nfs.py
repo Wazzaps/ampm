@@ -20,7 +20,7 @@ from ampm.repo.base import ArtifactRepo, ArtifactMetadata, ArtifactQuery, QueryN
 from ampm.repo.local import LOCAL_REPO
 from ampm.utils import _calc_dir_size, remove_atexit, LockFile
 
-DEFAULT_CHUNK_SIZE = 1024 * 256
+DEFAULT_CHUNK_SIZE = int(os.environ.get("AMPM_CHUNK_SIZE", str(1024 * 256)))
 NFS_OP_TIMEOUT_SEC = 16
 
 
@@ -211,9 +211,11 @@ class NfsConnection:
         _validate_path(remote_path)
         fh, _attrs = self._open(self._splitpath(remote_path))
         cookie = 0
+        cookie_verf = '0'
         while True:
-            readdir_res = self.nfs3.readdir(fh, cookie=cookie)
+            readdir_res = self.nfs3.readdir(fh, cookie=cookie, cookie_verf=cookie_verf)
             if readdir_res["status"] == NFS3_OK:
+                cookie_verf = readdir_res["resok"]["cookieverf"]
                 entry = readdir_res["resok"]["reply"]["entries"]
                 while entry:
                     yield entry[0]['name']
@@ -230,11 +232,13 @@ class NfsConnection:
         _validate_path(remote_path)
         fh, _attrs = self._open(self._splitpath(remote_path))
         cookie = 0
+        cookie_verf = '0'
         while True:
-            readdir_res = self.nfs3.readdir(fh, cookie=cookie)
+            readdir_res = self.nfs3.readdir(fh, cookie=cookie, cookie_verf=cookie_verf)
             if readdir_res["status"] == NFS3_OK:
                 if include_dirs:
                     yield remote_path
+                cookie_verf = readdir_res["resok"]["cookieverf"]
                 entry = readdir_res["resok"]["reply"]["entries"]
                 while entry:
                     if not entry[0]['name'].startswith(b'.'):
