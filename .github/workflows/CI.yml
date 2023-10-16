@@ -13,7 +13,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v2
       - name: Install apt dependencies
-        run: sudo apt update -y && sudo apt upgrade -y && sudo apt install -y minify
+        run: sudo apt update -y && sudo apt install -y minify
       - name: Build
         run: ./build.sh
       - name: Upload results
