@@ -527,6 +527,11 @@ def edit(ctx: click.Context, artifact: str, attr: Dict[str, str], env: Dict[str,
     remote_repo.edit_artifact(artifact, attr, env)
 
 
+@cli.command()
+def update():
+    os.system("/opt/ampm/update.sh")
+
+
 def main():
     cli()
 

@@ -2,6 +2,8 @@
 set -e
 
 REMOTE_REPO="nfs://127.0.0.1/mnt/myshareddir#ampm_repo"
+UPDATE_URL="https://github.com/Wazzaps/ampm/releases/latest/download/get_ampm.sh"
+UPDATE_CMD="curl -fsSL $UPDATE_URL | sudo sh"
 
 if [ "$(id -u)" -ne 0 ]; then
     echo 'This script must be run as root'
@@ -16,6 +18,12 @@ curl --progress-bar -fsSL https://github.com/Wazzaps/ampm/releases/latest/downlo
 echo ''
 echo "Configuring remote repo to be '$REMOTE_REPO'..."
 echo "$REMOTE_REPO" > /opt/ampm.tmp/repo_uri
+
+echo ''
+echo "Configuring update url to be '$UPDATE_URL'..."
+echo "#!/bin/sh" > /opt/ampm.tmp/update.sh
+echo "$UPDATE_CMD" >> /opt/ampm.tmp/update.sh
+chmod +x /opt/ampm.tmp/update.sh
 
 echo ''
 echo 'Adding ampm launcher to /usr/local/bin/...'

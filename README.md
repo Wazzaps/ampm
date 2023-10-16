@@ -100,6 +100,9 @@ ampm --server='nfs://1.2.3.4/some/repo' get foobar:mbf5qxqli76zx7btc5n7fkq47tjs6
 
 # Remove artifact from server (must be precise hash), Make sure no one is using the artifact!
 ampm remote-rm --i-realise-this-may-break-other-peoples-builds-in-the-future foobar:mbf5qxqli76zx7btc5n7fkq47tjs6cl2
+
+# Update ampm
+ampm update
 ```
 
 ## Hash calculation algorithm
