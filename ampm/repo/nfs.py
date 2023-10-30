@@ -13,14 +13,14 @@ from typing import List, Iterable, ContextManager, Optional, Dict
 import toml
 import tqdm
 from pyNfsClient import (Portmap, Mount, NFSv3, MNT3_OK, NFS_PROGRAM,
-                         NFS_V3, NFS3_OK, UNCHECKED, NFS3ERR_EXIST, UNSTABLE, NFS3ERR_NOTDIR, NFS3ERR_ISDIR, NFSSTAT3, NF3DIR)
+                         NFS_V3, NFS3_OK, UNCHECKED, NFS3ERR_EXIST, UNSTABLE, NFS3ERR_NOTDIR, NFS3ERR_ISDIR, NFSSTAT3, NF3DIR, NFS3ERR_NOTSUPP)
 
 from ampm.repo.base import ArtifactRepo, ArtifactMetadata, ArtifactQuery, QueryNotFoundError, ARTIFACT_TYPES, \
     ArtifactCorruptedError, NiceTrySagi
 from ampm.repo.local import LOCAL_REPO
 from ampm.utils import _calc_dir_size, remove_atexit, LockFile
 
-DEFAULT_CHUNK_SIZE = int(os.environ.get("AMPM_CHUNK_SIZE", str(1024 * 256)))
+DEFAULT_CHUNK_SIZE = int(os.environ.get("AMPM_CHUNK_SIZE", str(1024 * 32)))
 NFS_OP_TIMEOUT_SEC = 16
 
 
@@ -63,6 +63,7 @@ class NfsConnection:
         self.nfs3: NFSv3 = None
         self.root_fh: bytes = None
         self.chunk_size_limit = 1024 * 1024 * 1024  # 1 GiB
+        self.supports_readdirplus = True
 
         self.auth = {
             "flavor": 1,
@@ -234,7 +235,15 @@ class NfsConnection:
         cookie = 0
         cookie_verf = '0'
         while True:
-            readdir_res = self.nfs3.readdirplus(fh, cookie=cookie, cookie_verf=cookie_verf)
+            readdir_res = None
+            if self.supports_readdirplus:
+                readdir_res = self.nfs3.readdirplus(fh, cookie=cookie, cookie_verf=cookie_verf)
+                if readdir_res["status"] == NFS3ERR_NOTSUPP:
+                    self.supports_readdirplus = False
+
+            if not self.supports_readdirplus:
+                readdir_res = self.nfs3.readdir(fh, cookie=cookie, cookie_verf=cookie_verf)
+
             if readdir_res["status"] == NFS3_OK:
                 if include_dirs:
                     yield remote_path
@@ -243,7 +252,8 @@ class NfsConnection:
                 while entry:
                     if not entry[0]['name'].startswith(b'.'):
                         next_path = remote_path + '/' + entry[0]['name'].decode()
-                        if entry[0]['name_attributes']['attributes']['type'] != NF3DIR:
+                        if ('name_attributes' in entry[0] and
+                                entry[0]['name_attributes']['attributes']['type'] != NF3DIR):
                             yield next_path
                         else:
                             yield from self.walk_files(next_path, include_dirs)
