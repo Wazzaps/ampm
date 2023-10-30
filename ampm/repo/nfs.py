@@ -13,7 +13,7 @@ from typing import List, Iterable, ContextManager, Optional, Dict
 import toml
 import tqdm
 from pyNfsClient import (Portmap, Mount, NFSv3, MNT3_OK, NFS_PROGRAM,
-                         NFS_V3, NFS3_OK, UNCHECKED, NFS3ERR_EXIST, UNSTABLE, NFS3ERR_NOTDIR, NFS3ERR_ISDIR, NFSSTAT3)
+                         NFS_V3, NFS3_OK, UNCHECKED, NFS3ERR_EXIST, UNSTABLE, NFS3ERR_NOTDIR, NFS3ERR_ISDIR, NFSSTAT3, NF3DIR)
 
 from ampm.repo.base import ArtifactRepo, ArtifactMetadata, ArtifactQuery, QueryNotFoundError, ARTIFACT_TYPES, \
     ArtifactCorruptedError, NiceTrySagi
@@ -234,7 +234,7 @@ class NfsConnection:
         cookie = 0
         cookie_verf = '0'
         while True:
-            readdir_res = self.nfs3.readdir(fh, cookie=cookie, cookie_verf=cookie_verf)
+            readdir_res = self.nfs3.readdirplus(fh, cookie=cookie, cookie_verf=cookie_verf)
             if readdir_res["status"] == NFS3_OK:
                 if include_dirs:
                     yield remote_path
@@ -242,7 +242,11 @@ class NfsConnection:
                 entry = readdir_res["resok"]["reply"]["entries"]
                 while entry:
                     if not entry[0]['name'].startswith(b'.'):
-                        yield from self.walk_files(remote_path + '/' + entry[0]['name'].decode(), include_dirs)
+                        next_path = remote_path + '/' + entry[0]['name'].decode()
+                        if entry[0]['name_attributes']['attributes']['type'] != NF3DIR:
+                            yield next_path
+                        else:
+                            yield from self.walk_files(next_path, include_dirs)
                     cookie = entry[0]['cookie']
                     entry = entry[0]['nextentry']
                 if readdir_res["resok"]["reply"]["eof"]:
@@ -251,7 +255,7 @@ class NfsConnection:
                 yield remote_path
                 return
             else:
-                raise IOError(f"NFS readdir failed: code={readdir_res['status']} ({NFSSTAT3[readdir_res['status']]})")
+                raise IOError(f"NFS readdirplus failed: code={readdir_res['status']} ({NFSSTAT3[readdir_res['status']]})")
 
     def walk_files_dirs_at_end(self, remote_path: str):
         """Transform the output of `walk_files` such that the dirs appear after their contents"""
@@ -645,6 +649,8 @@ class NfsRepo(ArtifactRepo):
                             type_extra = matches.group(1)
                             artifact_hash = matches.group(2)
                             local_path = LOCAL_REPO.metadata_path_of(artifact_type + type_extra, artifact_hash, '.toml')
+                            if local_path.exists():
+                                continue
                             tmp_local_path = LOCAL_REPO.metadata_path_of(
                                 artifact_type + type_extra,
                                 artifact_hash,
