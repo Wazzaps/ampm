@@ -30,15 +30,14 @@ def _calc_dir_size(path: Path) -> int:
 
 def hash_local_file(local_path: Path) -> str:
     hasher = hashlib.sha256(b'')
-    fd = local_path.open('rb')
+    with local_path.open('rb') as fd:
+        while True:
+            chunk = fd.read(1024 * 1024)
+            if len(chunk) == 0:
+                break
+            hasher.update(chunk)
 
-    while True:
-        chunk = fd.read(1024 * 1024)
-        if len(chunk) == 0:
-            break
-        hasher.update(chunk)
-
-    return hasher.hexdigest()
+        return hasher.hexdigest()
 
 
 def randbytes(length: int) -> bytes:

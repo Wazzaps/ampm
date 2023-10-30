@@ -539,7 +539,7 @@ def test_stress(clean_repos, upload, list_, download):
     assert len(artifacts) == COUNT, f"Listing {COUNT} artifacts returned {len(artifacts)} instead"
     list_duration = time.time() - t
     print(f'Listed {COUNT} artifacts in {list_duration} seconds')
-    assert list_duration < 30, f"Listing {COUNT} artifacts took too long"
+    assert list_duration < 10, f"Listing {COUNT} artifacts took too long"
 
 
 @pytest.mark.parametrize('is_compressed', ['compressed', 'uncompressed'])
